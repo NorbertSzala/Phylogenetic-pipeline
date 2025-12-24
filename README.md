@@ -1,4 +1,3 @@
-```markdown
 Zaimplementuj i przetestuj pipeline filogenetyczny prowadzący do obliczenia zbioru drzew genów i dalej drzewa genomów, począwszy od genomów z podziałem na geny. Można zastosować własne pomysły – do uzgodnienia.
 
 ---
@@ -137,4 +136,3 @@ Wymagane:
 - za brak porównania do literatury: **–3 pkt**,
 - za brak porównania do timetree.org lub taksonomii NCBI: **–2 pkt**,
 - w przypadku większej liczby zainteresowanych w sesji wyznaczony zostanie termin dodatkowy na prezentacje, ale bez bonusu 5 pkt.
-```
