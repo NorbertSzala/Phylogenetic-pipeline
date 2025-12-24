@@ -1,9 +1,5 @@
-<<<<<<< HEAD
-
 # Projekt
 
-=======
->>>>>>> 50e3193e5813d43fff649ce9fc4b4e66bbf123fe
 Zaimplementuj i przetestuj pipeline filogenetyczny prowadzący do obliczenia zbioru drzew genów i dalej drzewa genomów, począwszy od genomów z podziałem na geny. Można zastosować własne pomysły – do uzgodnienia.
 
 ---
