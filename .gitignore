@@ -1,0 +1,11 @@
+*.aln
+*.fa
+*.fasta
+*.fastq
+*.fq
+ignore.txt
+*.json
+*.log
+*.tsv
+*.csv
+*.out
