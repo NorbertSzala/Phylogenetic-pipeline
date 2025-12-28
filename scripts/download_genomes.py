@@ -82,6 +82,8 @@ def extract_protein_faa(zip_path: Path, accession: str, species_safe: str, out_d
 
 
 # ~~~~~ Read tsv input ~~~~~
+print('#3. Downloading selected assemblies')
+
 assemblies = defaultdict(list)
 
 
@@ -92,6 +94,7 @@ with INPUT_TSV.open() as fh:
         assemblies[species].append((int(rank), accession))
 
 # ~~~~~ Downloading ~~~~~
+
 for species, items in tqdm(assemblies.items(), total=len(assemblies), desc="Downloading assemblies"):
     items.sort()  # rank 1 -> rank 2
     safe = safe_name(species)

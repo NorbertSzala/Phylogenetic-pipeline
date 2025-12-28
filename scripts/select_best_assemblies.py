@@ -40,6 +40,7 @@ def assembly_priority(rep: dict) -> int:
 
 
 # ===== Main logic =====
+print('#2. Selecting best assemblies')
 
 with OUT_TSV.open("w") as out:
     out.write("species\tassembly_accession\trank\n")

@@ -10,10 +10,12 @@
 
 # Next step: select_best_assemblies.py
 
+echo "#1. Selecting genomes from NCBI based on species names..."
 
 # Safety settings - stop script on errors, undefined variables, or failed pipes
 set -euo pipefail
 
+# tutaj moze by problem ze sciezkami, jak uruchamiam z innego katalogu
 source config.sh
 
 # Set output and input directories/files
