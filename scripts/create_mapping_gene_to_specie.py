@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 
-'''
+"""
 Script to create a mapping file from gene IDs to species names
 gene_001    Species_A
 
 Usefull while analyzing clustering results from MMseqs2
 
-#5th part of pipeline
-'''
+#4th part of pipeline
+"""
 
 # ~~~~~ Imports ~~~~~
+import argparse
 from pathlib import Path
 from tqdm import tqdm
 
@@ -26,10 +27,11 @@ LOG_FILE.write_text("")
 
 # ~~~~~ Functions ~~~~~
 
+
 def create_mapping_gene_to_species(input_dir: Path, mapping_file: Path):
-    """ Create mapping file with gene ID to species name. """
-    fasta_files = list(input_dir.glob('*.faa'))
-    
+    """Create mapping file with gene ID to species name."""
+    fasta_files = list(input_dir.glob("*.faa"))
+
     with mapping_file.open("w") as out:
         for fasta_file in tqdm(fasta_files, desc="Creating gene-to-species mapping"):
             species_name = fasta_file.stem
@@ -50,6 +52,7 @@ def create_mapping_gene_to_species(input_dir: Path, mapping_file: Path):
             except Exception as e:
                 with LOG_FILE.open("a") as log:
                     log.write(f"ERROR\t{fasta_file}\t{e}\n")
+
 
 # ~~~~~ Main Logic ~~~~~
 # Create mapping gene to species file

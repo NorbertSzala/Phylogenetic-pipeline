@@ -15,16 +15,14 @@ echo "#1. Selecting genomes from NCBI based on species names..."
 # Safety settings - stop script on errors, undefined variables, or failed pipes
 set -euo pipefail
 
-# tutaj moze by problem ze sciezkami, jak uruchamiam z innego katalogu
-source config.sh
+INPUT=$1
+OUTPUT=$2
 
 # Set output and input directories/files
-out_dir="../data/proteomes/selection"
-mkdir -p "${out_dir}" ../logs
-input_file="../data/short_taxonomy.csv"
+mkdir -p "$OUTPUT" ./logs
 
 # Set logging
-LOG="../logs/selecting_assemblies.log"
+LOG="selecting_assemblies.log"
 : > "$LOG" # clear log file
 
 # read species names line by line from the input file
@@ -32,11 +30,13 @@ while IFS= read -r SPECIES; do
     [[ -z "$SPECIES" ]] && continue
 
     SAFE=$(echo "$SPECIES" | tr ' /' '__')
+    TMP=$(mktemp)
 
-    if ! datasets summary genome taxon "$SPECIES" \
-        > "${out_dir}/${SAFE}_summary.json"; then
-        echo "$SPECIES" | tee -a "$LOG"
-        continue
+    if datasets summary genome taxon "$SPECIES" > "$TMP"; then
+        mv "$TMP" "${OUTPUT}/${SAFE}_summary.json"
+    else
+        echo "$SPECIES" >> "$LOG"
+        rm -f "$TMP"
     fi
 
-done < "$input_file"
+done < "$INPUT"
