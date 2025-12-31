@@ -6,48 +6,55 @@ nextflow.enable.dsl=2
 
 params.taxonomy = "data/short_taxonomy.csv"
 params.scripts = "scripts"
-params.results = 'results   '
+params.results = 'results'
 
 workflow {
     // 1. input taxonomy file
-    taxonomy_ch = Channel.fromPath(params.taxonomy)
+    taxonomy_ch = channel.fromPath(params.taxonomy)
 
     // //2. select genome assemblies (JNOS summaries)
-    json_summaries_ch = select_genomes(taxonomy_ch)
+    script1 = channel.fromPath("scripts/select_genomes.sh")
+    json_summaries_dir_ch = select_genomes(taxonomy_ch, script1)
     
-    // //3. select best assemblies
-    select_best_assemblies(json_summaries_ch)
+    // // //3. select best assemblies
+    script2 = channel.fromPath("scripts/select_best_assemblies.py")
+    assemblies_tsv = select_best_assemblies(json_summaries_dir_ch, script2)
 
-    // //4. download proteomes
-    // proteomes_ch = download_genomes(assemblies_ch)
+    // // //4. download proteomes
+    script3 = channel.fromPath("scripts/download_genomes.py")
+    proteomes_ch = download_genomes(assemblies_tsv, script3)
     
-    // //5. rCreate gene to species mapping
-    // mapping_ch = create_mapping(proteomes_ch)
+    //5. rCreate gene to species mapping
+    script4 = channel.fromPath('scripts/create_mapping_gene_to_specie.py')
+    create_mapping(proteomes_ch.sequences, script4)
 
-    // //6. run mmseqs2 to make 'BLAST' andcreate gene families
-    // clusters_ch = run_mmseqs(proteomes_ch)
+    //6. run mmseqs2 to make 'BLAST' andcreate gene families
+    script5 = channel.fromPath('scripts/make_BLAST-like_clusters.py')
+    run_mmseqs(proteomes_ch.sequences, script5)
 
-    // //7. filter orthologous genes (1-to-1)
-    // filter_orthologs(clusters_ch)
+    // clusters_ch = run_mmseqs(proteomes_ch.sequences, script5)
+
+    //7. filter orthologous genes (1-to-1)
+    // script6 = channel.fromPath('scripts/filter_cluster.py')
+    // filter_orthologs(clusters_ch, script6)
 }
 
 
 process select_genomes {
-
-    publishDir "data/proteomes/", mode: 'copy'
+    // Copy output to that path
+    publishDir "data/proteomes", mode: 'copy'
 
     input:
     path taxonomy
+    path script
 
     output:
-    path selection
+    path "selection"
 
     script:
     """
     ls ./
-    bash ${projectDir}/scripts/select_genomes.sh \
-        ${taxonomy} \
-        selection
+    bash ${script} ${taxonomy} "selection"
     """
 }
 
@@ -56,73 +63,101 @@ process select_best_assemblies {
     publishDir "data/proteomes", mode: 'copy'
 
     input:
-    path selection_dir
+    path json_files
+    path script
 
     output:
-    path "nextflow_assemblies.tsv"
+    file "selected_assemblies.tsv"
 
     script:
     """
-    python3 ${projectDir}/scripts/select_best_assemblies.py \
-        --input ${selection_dir} \
-        --output nextflow_assemblies.tsv
+    python3 ${script} \
+        --input ${json_files} \
+        --output selected_assemblies.tsv
     """
 }
 
 
-// process download_genomes {
-//     input:
-//     path  data/proteomes/selected_assemblies.tsv
+process download_genomes {
+    publishDir "data/proteomes", mode: 'copy'
+
+    input:
+    path assemblies_tsv
+    path script
 
     
-//     output:
-//     path "data/proteomes/sequences/*.faa"
+    output:
+    path 'zipped', emit: zipped
+    path 'sequences', emit: sequences
 
-//     script:
-//     """
-//     python3 ${projectDir}/scripts/download_genomes.py
-//     """
-// }
+    script:
+    """
+    python3 ${script} \
+        --input ${assemblies_tsv} \
+        --output_zipped zipped \
+        --output_sequences sequences
+    """
+}
 
-// process create_mapping {
-//     input:
-//     path "*.faa"
+process create_mapping {
+    publishDir "results/mapping", mode: 'copy'
     
-//     output:
-//     path "results/clusters/gene_to_species.tsv"
+    input:
+    path proteome_sequences
+    path script
+    
+    output:
+    file 'gene_to_species.tsv'
 
-//     script:
-//     """
-//     python3 ${projectDir}/scripts/create_mapping_gene_to_species.py
-//     """
-// }
+    script:
+    """
+    python3 ${script} \
+        --input ${proteome_sequences} \
+        --output gene_to_species.tsv
+    """
+}
 
 
-// process run_mmseqs {
+process run_mmseqs {
 
-//     input:
-//     path "*.faa"
+    publishDir "results/clusters/mmseqs2", mode: 'copy'
 
-//     output:
-//     path "results/clusters/mmseqs2/*"
+    input:
+    path proteome_sequences
+    path script
 
-//     script:
-//     """
-//     python ${projectDir}/scripts/make_BLAST-like_clusters.py
-//     """
-// }
+    output:
+    path "clusters_cluster.tsv"
+    path "clusters_rep_seq.fa"
+    path "clusters_all_seqs.fa"
+    path "all_proteomes.faa"
+
+    script:
+    """
+    mkdir -p tmp
+
+    python3 ${script} \
+        --input ${proteome_sequences} \
+        --output clusters \
+        --tmp tmp
+    """
+}
 
 // process filter_orthologs {
-
+//     publishDir "results/clusters"
+    
 //     input:
-//     path "clusters_cluster.tsv"
+//     path clusters
+//     path script
 
 //     output:
-//     path "results/clusters/orthologs1to1.tsv"
+//     file "orthologs1to1.tsv"
 
 //     script:
 //     """
-//     python ${projectDir}/scripts/filter_cluster.py
+//     python3 ${script} \
+//         --input ${clusters} \
+//         --output orthologs1to1.tsv
 //     """
 // }
 
@@ -140,7 +175,3 @@ process select_best_assemblies {
     
 // //     """
 // // }
-
-
-// # TODO: przetestowac nextflow na wszystkich etapach do tej pory
-// # TODO: ustawic logowanie we wszystkich skryptach do katalogu outputu bo nf tego nie lubi

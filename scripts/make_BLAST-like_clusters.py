@@ -19,16 +19,28 @@ import subprocess
 import shutil
 
 # ~~~~~ Paths ~~~~~
-INPUT_DIR = Path("../data/proteomes/sequences")
-RESULTS_DIR = Path("../results/clusters/mmseqs2")
-TMP_DIR = Path("../tmp/mmseqs")
-LOG_FILE = Path("../logs/mmseqs2.log")
+parser = argparse.ArgumentParser(
+    description="Script creating blast-like comparisons and clusters genes"
+)
 
-RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-TMP_DIR.mkdir(parents=True, exist_ok=True)
-LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-LOG_FILE.write_text("")
+parser.add_argument(
+    "--input",
+    type=Path,
+    required=True,
+    help="Path to folder with downloaded in second previous step .faa sequences",
+)
 
+parser.add_argument("--tmp", type=Path, required=True)
+parser.add_argument("--output", required=True, type=Path)
+
+args = parser.parse_args()
+INPUT = Path(args.input)
+TMP = Path(args.tmp)
+TMP.mkdir(parents=True, exist_ok=True)
+OUTPUT = Path(args.output)
+OUTPUT.mkdir(parents=True, exist_ok=True)
+LOG = Path(OUTPUT.parent / "mmseqs2_errors.log")
+LOG.write_text("")
 
 # ~~~~~ Functions ~~~~~
 
@@ -73,7 +85,7 @@ def run_mmseqs2(input_fasta: Path, tmp_dir: Path, output_dir: Path) -> bool:
         "mmseqs",
         "easy-cluster",
         str(input_fasta),
-        str(output_dir / "clusters"),
+        str(output_dir),
         str(tmp_dir),
         "--min-seq-id",
         "0.3",  # mimimum sequence identity 30%
@@ -87,7 +99,7 @@ def run_mmseqs2(input_fasta: Path, tmp_dir: Path, output_dir: Path) -> bool:
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
 
-    with LOG_FILE.open("a") as log_file:
+    with LOG.open("a") as log_file:
         log_file.write("STDOUT:\n")
         log_file.write(result.stdout)
         log_file.write("\nSTDERR:\n")
@@ -99,17 +111,13 @@ def run_mmseqs2(input_fasta: Path, tmp_dir: Path, output_dir: Path) -> bool:
 # ~~~~~ Main logic ~~~~~
 if __name__ == "__main__":
 
-    merged_fasta = RESULTS_DIR / "all_proteomes.faa"
+    merged_fasta = Path("all_proteomes.faa")
 
-    merge_and_rename_fastas(INPUT_DIR, merged_fasta)
+    merge_and_rename_fastas(INPUT, merged_fasta)
 
     print(f"Clustering sequences using MMseqs2")
-    success = run_mmseqs2(merged_fasta, TMP_DIR, RESULTS_DIR)
+    success = run_mmseqs2(merged_fasta, TMP, OUTPUT)
 
     if not success:
         print("MMseqs2 failed. Check logs/mmseqs2.log")
         exit(1)
-
-    # Cleanup only after successful run
-    shutil.rmtree(TMP_DIR)
-    TMP_DIR.mkdir()

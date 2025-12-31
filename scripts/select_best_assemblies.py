@@ -20,7 +20,12 @@ from tqdm import tqdm
 parser = argparse.ArgumentParser(
     description="Select best genome assemblies from NCBI RefSeq."
 )
-parser.add_argument("--input", type=Path, required=True)
+parser.add_argument(
+    "--input",
+    type=Path,
+    required=True,
+    help="Directory containing *_summary.json files",
+)
 parser.add_argument("--output", type=Path, required=True)
 
 
