@@ -28,15 +28,13 @@ workflow {
     script4 = channel.fromPath('scripts/create_mapping_gene_to_specie.py')
     create_mapping(proteomes_ch.sequences, script4)
 
-    //6. run mmseqs2 to make 'BLAST' andcreate gene families
+    //6. run mmseqs2 to make 'BLAST' and create gene families
     script5 = channel.fromPath('scripts/make_BLAST-like_clusters.py')
-    run_mmseqs(proteomes_ch.sequences, script5)
-
-    // clusters_ch = run_mmseqs(proteomes_ch.sequences, script5)
+    clusters_ch = run_mmseqs(proteomes_ch.sequences, script5)
 
     //7. filter orthologous genes (1-to-1)
-    // script6 = channel.fromPath('scripts/filter_cluster.py')
-    // filter_orthologs(clusters_ch, script6)
+    script6 = channel.fromPath('scripts/filter_cluster.py')
+    filter_orthologs(clusters_ch.clusters, script6)
 }
 
 
@@ -50,6 +48,7 @@ process select_genomes {
 
     output:
     path "selection"
+
 
     script:
     """
@@ -127,10 +126,10 @@ process run_mmseqs {
     path script
 
     output:
-    path "clusters_cluster.tsv"
-    path "clusters_rep_seq.fa"
-    path "clusters_all_seqs.fa"
-    path "all_proteomes.faa"
+    path "clusters_cluster.tsv", emit: clusters
+    path "clusters_rep_seq.fasta", emit: repseq
+    path "clusters_all_seqs.fasta", emit: allseqs
+    path "all_proteomes.faa", emit: allproteomes
 
     script:
     """
@@ -143,23 +142,23 @@ process run_mmseqs {
     """
 }
 
-// process filter_orthologs {
-//     publishDir "results/clusters"
+process filter_orthologs {
+    publishDir "results/clusters"
     
-//     input:
-//     path clusters
-//     path script
+    input:
+    path clusters
+    path script
 
-//     output:
-//     file "orthologs1to1.tsv"
+    output:
+    file "orthologs1to1.tsv"
 
-//     script:
-//     """
-//     python3 ${script} \
-//         --input ${clusters} \
-//         --output orthologs1to1.tsv
-//     """
-// }
+    script:
+    """
+    python3 ${script} \
+        --input ${clusters} \
+        --output orthologs1to1.tsv
+    """
+}
 
 
 

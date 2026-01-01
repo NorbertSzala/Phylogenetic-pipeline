@@ -1,0 +1,195 @@
+```groovy
+nextflow_pipeline {
+    name "Test main pipeline workflow"
+    script "main.nf"
+
+    test("Pipeline runs successfully with test data") {
+        
+        when {
+            params {
+                taxonomy = "data/short_taxonomy.csv"
+                scripts = "scripts"
+                results = "results"
+            }
+        }
+
+        then {
+            assert workflow.success
+            assert workflow.trace.tasks().size() >= 6
+            
+            // Check that select_genomes process completed
+            assert workflow.trace.tasks().find { it.process == 'select_genomes' }.status == 'COMPLETED'
+            
+            // Check that select_best_assemblies process completed
+            assert workflow.trace.tasks().find { it.process == 'select_best_assemblies' }.status == 'COMPLETED'
+            
+            // Check that download_genomes process completed
+            assert workflow.trace.tasks().find { it.process == 'download_genomes' }.status == 'COMPLETED'
+            
+            // Check that create_mapping process completed
+            assert workflow.trace.tasks().find { it.process == 'create_mapping' }.status == 'COMPLETED'
+            
+            // Check that run_mmseqs process completed
+            assert workflow.trace.tasks().find { it.process == 'run_mmseqs' }.status == 'COMPLETED'
+            
+            // Check that filter_orthologs process completed
+            assert workflow.trace.tasks().find { it.process == 'filter_orthologs' }.status == 'COMPLETED'
+        }
+    }
+}
+
+nextflow_process {
+    name "Test select_genomes process"
+    script "main.nf"
+    process "select_genomes"
+
+    test("select_genomes produces selection directory") {
+        
+        when {
+            process {
+                """
+                input[0] = file("${projectDir}/data/short_taxonomy.csv")
+                input[1] = file("${projectDir}/scripts/select_genomes.sh")
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.size() == 1
+            assert path(process.out.get(0)).exists()
+        }
+    }
+}
+
+nextflow_process {
+    name "Test select_best_assemblies process"
+    script "main.nf"
+    process "select_best_assemblies"
+
+    test("select_best_assemblies produces TSV file") {
+        
+        when {
+            process {
+                """
+                input[0] = file("${projectDir}/data/proteomes/selection")
+                input[1] = file("${projectDir}/scripts/select_best_assemblies.py")
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.size() == 1
+            assert path(process.out.get(0)).exists()
+            assert path(process.out.get(0)).name == "selected_assemblies.tsv"
+        }
+    }
+}
+
+nextflow_process {
+    name "Test download_genomes process"
+    script "main.nf"
+    process "download_genomes"
+
+    test("download_genomes produces zipped and sequences directories") {
+        
+        when {
+            process {
+                """
+                input[0] = file("${projectDir}/data/proteomes/selected_assemblies.tsv")
+                input[1] = file("${projectDir}/scripts/download_genomes.py")
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.zipped.size() == 1
+            assert process.out.sequences.size() == 1
+            assert path(process.out.zipped.get(0)).exists()
+            assert path(process.out.sequences.get(0)).exists()
+        }
+    }
+}
+
+nextflow_process {
+    name "Test create_mapping process"
+    script "main.nf"
+    process "create_mapping"
+
+    test("create_mapping produces gene to species TSV") {
+        
+        when {
+            process {
+                """
+                input[0] = file("${projectDir}/data/proteomes/sequences")
+                input[1] = file("${projectDir}/scripts/create_mapping_gene_to_specie.py")
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.size() == 1
+            assert path(process.out.get(0)).exists()
+            assert path(process.out.get(0)).name == "gene_to_species.tsv"
+        }
+    }
+}
+
+nextflow_process {
+    name "Test run_mmseqs process"
+    script "main.nf"
+    process "run_mmseqs"
+
+    test("run_mmseqs produces cluster files") {
+        
+        when {
+            process {
+                """
+                input[0] = file("${projectDir}/data/proteomes/sequences")
+                input[1] = file("${projectDir}/scripts/make_BLAST-like_clusters.py")
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.clusters.size() == 1
+            assert process.out.repseq.size() == 1
+            assert process.out.allseqs.size() == 1
+            assert process.out.allproteomes.size() == 1
+            assert path(process.out.clusters.get(0)).name == "clusters_cluster.tsv"
+            assert path(process.out.repseq.get(0)).name == "clusters_rep_seq.fa"
+            assert path(process.out.allseqs.get(0)).name == "clusters_all_seqs.fa"
+            assert path(process.out.allproteomes.get(0)).name == "all_proteomes.faa"
+        }
+    }
+}
+
+nextflow_process {
+    name "Test filter_orthologs process"
+    script "main.nf"
+    process "filter_orthologs"
+
+    test("filter_orthologs produces orthologs TSV") {
+        
+        when {
+            process {
+                """
+                input[0] = file("${projectDir}/results/clusters/mmseqs2/clusters_cluster.tsv")
+                input[1] = file("${projectDir}/scripts/filter_cluster.py")
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.size() == 1
+            assert path(process.out.get(0)).exists()
+            assert path(process.out.get(0)).name == "orthologs1to1.tsv"
+        }
+    }
+}
+```" "

@@ -23,16 +23,26 @@ import argparse
 from pathlib import Path
 from tqdm import tqdm
 
-
 # ~~~~~ Paths ~~~~~
-INPUT_FILE = Path("../results/clusters/mmseqs2/clusters_cluster.tsv")
-OUTPUT_FILE = Path("../results/clusters/orthologs1to1.tsv")
-LOG_FILE = Path("../logs/filter_cluster.log")
+parser = argparse.ArgumentParser(
+    description="Script to generate filtered gene families from MMseqs2 clustering output."
+)
 
-OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+parser.add_argument(
+    "--input",
+    type=Path,
+    required=True,
+    help="Path to folder .tsv file *_cluster.tsv (MMseqs2 output)",
+)
 
-LOG_FILE.write_text("")
+parser.add_argument("--output", required=True, type=Path)
+
+args = parser.parse_args()
+INPUT = Path(args.input)
+OUTPUT = Path(args.output)
+OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+LOG = Path(OUTPUT.parent / "filter_cluster.log")
+LOG.write_text("")
 
 
 # ~~~~~~ Functions ~~~~~
@@ -47,7 +57,7 @@ def load_clusters(input_file: Path) -> dict:
 
     with input_file.open() as infile:
         for line in infile:
-            member_id, rep_id = line.strip().split("\t")
+            rep_id, member_id = line.rstrip("\n").split("\t")
             clusters[rep_id].append(member_id)
 
     return clusters
@@ -55,9 +65,8 @@ def load_clusters(input_file: Path) -> dict:
 
 if __name__ == "__main__":
     clusters = load_clusters(
-        INPUT_FILE
+        INPUT
     )  # read clusters from MMSeqs2 output: <member_sequence_id>    <representative_sequence_id>
-
     # count how many genomes are present
     all_species = set()
     for members in clusters.values():
@@ -66,7 +75,7 @@ if __name__ == "__main__":
 
     N_GENOMES = len(all_species)
 
-    with OUTPUT_FILE.open("w") as outfile:
+    with OUTPUT.open("w") as outfile:
         outfile.write("cluster_id\tspecie\tgene_id\n")
 
         for rep_id, members in tqdm(
@@ -81,7 +90,7 @@ if __name__ == "__main__":
                 for gene in members:
                     outfile.write(f"{rep_id}\t{species_from_id(gene)}\t{gene}\n")
             else:
-                with LOG_FILE.open("a") as logfile:
+                with LOG.open("a") as logfile:
                     logfile.write(
                         f"Cluster {rep_id} skipped: {len(members)} members from {len(set(species))} species (needed: {N_GENOMES})\n"
                     )
