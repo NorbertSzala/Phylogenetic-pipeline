@@ -6,7 +6,7 @@
 
 # Input: protein sequences in .fasta format in data/proteomes/sequences
 # Output:
-# - merged and renamed fasta files (input for MMseqs2)
+# - merged and renamed fasta files - one file per all fasta files (input for MMseqs2)
 # - clusters_all__seqs.fasta unused
 # - cluster_cluster.tsv - The most important file. Key to 3rd step - gene families. format: <member_sequence_id>    <representative_sequence_id>
 # - clusters_rep_seqs.fasta - Representative sequences for clusters. one representative sequence for one cluster
@@ -16,7 +16,6 @@ import argparse
 from pathlib import Path
 from tqdm import tqdm
 import subprocess
-import shutil
 
 # ~~~~~ Paths ~~~~~
 parser = argparse.ArgumentParser(

@@ -34,7 +34,28 @@ workflow {
 
     //7. filter orthologous genes (1-to-1)
     script6 = channel.fromPath('scripts/filter_cluster.py')
-    filter_orthologs(clusters_ch.clusters, script6)
+    orthologs_ch = filter_orthologs(clusters_ch.clusters, script6)
+
+    //8 Extract cluster ids  from othologs
+    cluster_ids_ch = orthologs_ch
+        .splitCsv(header: true, sep: '\t')
+        .map { row -> row.cluster_id }
+        .distinct()
+
+
+    //9. Make alignemnt (MAFFT) on clusters)
+    script7 = channel.fromPath('scripts/create_fasta_from_clusters.py')
+
+    fasta_inputs_ch = cluster_ids_ch
+        .combine(orthologs_ch)
+        .combine(clusters_ch.allproteomes)
+        .combine(script7)
+        .map { a, b, c, d -> tuple(a, b, c, d) }
+    
+    fasta_ch = make_clusters_fasta(fasta_inputs_ch)
+
+    mafft_align(fasta_ch)
+
 }
 
 
@@ -143,7 +164,7 @@ process run_mmseqs {
 }
 
 process filter_orthologs {
-    publishDir "results/clusters"
+    publishDir "results/clusters", mode: 'copy'
     
     input:
     path clusters
@@ -160,6 +181,45 @@ process filter_orthologs {
     """
 }
 
+
+
+process make_clusters_fasta {
+    maxForks 20
+    cpus 1
+
+    input:
+    tuple val(cluster_id), path(orthologs), path(proteomes), path(script)
+
+
+    output:
+    path "${cluster_id.replace('|','_')}.faa"
+
+    script:
+    """
+    python3 ${script} \
+        --cluster_id '${cluster_id}' \
+        --orthologs ${orthologs} \
+        --proteomes ${proteomes} \
+        --output ${cluster_id.replace('|','_')}.faa
+    """
+}
+
+
+
+process mafft_align {
+    publishDir "results/alignments", mode: 'copy'
+
+    input:
+    path fasta
+
+    output:
+    path "${fasta.simpleName}.aln.faa"
+
+    script:
+    """
+    mafft --thread ${task.cpus} ${fasta} > ${fasta.simpleName}.aln.faa
+    """
+}
 
 
 // // process  {

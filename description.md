@@ -74,6 +74,18 @@ Zastanawiam się nad wyborem MMseqs2 zamiast Blast - jedno narzędzie do alignem
 ## Filtracja klastrów - odrzucenie tych pojedynczych
 
 Własny skrypt pythonowy
+Przykladowy output klastrowania wraz z interpretacja:
+
+| cluster_id                | specie      | gene_id                   |
+| :------------------------ | :---------- | :------------------------ |
+| Saccharomyces__cerevisiae | NP_009557.1 | Saccharomyces__cerevisiae | Saccharomyces__cerevisiae|NP_009557.1
+| Saccharomyces__cerevisiae | NP_009557.1 | Aspergillus__niger        | Aspergillus__niger|XP_001394994.1
+| Saccharomyces__cerevisiae | NP_009557.1 | Malassezia__globosa       | Malassezia__globosa|XP_001731973.1
+
+- Mamy klaster `Saccharomyces__cerevisiae | NP_009557.1` (*cluster_id*), którego reprezentantem jest sekwencja genu **NP_009557.1** pochodząca z *Saccharomyces cerevisiae* (`specie`). Do tego klastra należą również inne geny (`gene_id`) z podanymi informacjami o organiźmie oraz o identyfikatorze genu.
+- Razem te geny tworzą homologi,- mają wspólnego przodka i zostały rozdzielone na zasadzie specjacji
+- Zostały razem zgrupowane na podstawie podobieństwa sekwencji
+- 
 
 ## MSA
 
