@@ -7,8 +7,15 @@ nextflow.enable.dsl=2
 params.taxonomy = "data/short_taxonomy.csv"
 params.scripts = "scripts"
 params.results = 'results'
+params.bootstrap = false
+params.bootstrap_reps = 1000
+
+
 
 workflow {
+    println "BOOTSTRAP = ${params.bootstrap}"
+    println "BOOTSTRAP REPS = ${params.bootstrap_reps}"
+
     // 1. input taxonomy file
     taxonomy_ch = channel.fromPath(params.taxonomy)
 
@@ -54,8 +61,10 @@ workflow {
     
     fasta_ch = make_clusters_fasta(fasta_inputs_ch)
 
-    mafft_align(fasta_ch)
+    aln_ch = mafft_align(fasta_ch)
 
+    //10. Count ML trees on given alignments. One alignment per one script execution
+    gene_tree_ml(aln_ch)
 }
 
 
@@ -185,7 +194,7 @@ process filter_orthologs {
 
 process make_clusters_fasta {
     maxForks 20
-    cpus 1
+    cpus 4
 
     input:
     tuple val(cluster_id), path(orthologs), path(proteomes), path(script)
@@ -221,16 +230,49 @@ process mafft_align {
     """
 }
 
+process gene_tree_ml {
+    // Adjust path depending on params.bootstrap. Returns folder path
+    // ? means or. If params.bootstrap is True, use first value, else second one
+    publishDir {
+        params.bootstrap ?
+        "results/gene_trees/bootstrap" :
+        "results/gene_trees/no_bootstrap"
+    }, mode: 'copy'
 
-// // process  {
-// //     input:
-// //     path
-    
-// //     output:
-// //     path
+    cpus 4
+    memory '4 GB'
+    time '2h'
 
-// //     script:
-// //     """
+    input: //one alignemnt = one tree
+    path aln
     
-// //     """
-// // }
+    output: //remove last extension and add your own A.aln.faa -> A.aln.treefile
+    path "${aln.simpleName}.treefile"
+
+    script:
+    def bootstrap_flag = params.bootstrap ? "-B ${params.bootstrap_reps}" : ""
+
+    """
+    iqtree2 \
+        -s ${aln} \
+        -m MFP \
+        -nt ${task.cpus} \
+        ${bootstrap_flag} \
+        -pre ${aln.simpleName} \
+        -quiet
+    """
+}
+
+
+// process  {
+//     input:
+//     path
+    
+//     output:
+//     path
+
+//     script:
+//     """
+    
+//     """
+// }
