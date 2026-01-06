@@ -14,19 +14,21 @@ Species without RefSeq assemblies are reported separately.
 import argparse
 import json
 from pathlib import Path
-from tqdm import tqdm
+import sys
 
 # ===== Paths =====
 parser = argparse.ArgumentParser(
-    description="Select best genome assemblies from NCBI RefSeq."
+    description="Select best RefSeq assemblies from one NCBI summary JSON."
 )
+
 parser.add_argument(
     "--input",
     type=Path,
     required=True,
-    help="Directory containing *_summary.json files",
+    help="Single *_summary.json file",
 )
-parser.add_argument("--output", type=Path, required=True)
+
+parser.add_argument("--output", type=Path, required=True, help="Output TSV file")
 
 
 args = parser.parse_args()
@@ -34,13 +36,9 @@ args = parser.parse_args()
 INPUT = Path(args.input)
 OUTPUT = Path(args.output)
 OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-LOG = OUTPUT.parent / "NoRefSeq_assemblies.log"
-LOG.write_text("")  # overwrite if exists
 
 
 # ===== Helper functions =====
-
-
 def assembly_priority(rep: dict) -> int:
     """
     Assign a simple priority based on assembly level.
@@ -51,47 +49,54 @@ def assembly_priority(rep: dict) -> int:
     return {"chromosome": 3, "scaffold": 2, "contig": 1}.get(level, 0)
 
 
-# ===== Main logic =====
-print("#2. Selecting best assemblies")
+def load_summary(path: Path) -> dict:
+    """Function returning loaded JSON fil"""
+    if not path.exists():
+        sys.exit(f"Input file does not exists: {path}")
+    if path.stat().st_size == 0:
+        sys.exit(f"Empty input file: {path}")
 
-with OUTPUT.open("w") as out:
-    out.write("species\tassembly_accession\trank\n")
+    try:
+        with path.open() as fh:
+            return json.load(fh)
+    except json.JSONDecodeError:
+        sys.exit(f"Invalid JSON: {path}")
 
-    for json_file in tqdm(
-        INPUT.glob("*_summary.json"), desc="Selecting RefSeq assemblies"
-    ):
-        # Skip empty or invalid files
-        if json_file.stat().st_size == 0:
-            continue
 
-        try:
-            with json_file.open() as fh:
-                data = json.load(fh)
-        except json.JSONDecodeError:
-            continue
+def select_refseq_assemblies(data: dict) -> tuple[str, list[dict]]:
+    """Funciton selecting the best refseq assemblies to download later"""
+    reports = data.get("reports", [])
+    if not reports:
+        return "UNKNOWN", []
 
-        reports = data.get("reports", [])
-        if not reports:
-            continue
+    species = reports[0].get("organism", {}).get("organism_name", "UNKNOWN")
 
-        # Species name is shared across reports in one file
-        species = reports[0].get("organism", {}).get("organism_name", "UNKNOWN")
+    refseq = [
+        rep for rep in reports if rep.get("current_accession", "").startswith("GCF")
+    ]
 
-        # Keep only RefSeq assemblies (GCF)
-        refseq = [
-            rep for rep in reports if rep.get("current_accession", "").startswith("GCF")
-        ]
+    refseq.sort(key=assembly_priority, reverse=True)
+    return species, refseq
 
-        # If no RefSeq assembly exists, report species and skip it
-        if not refseq:
-            with LOG.open("a") as log:
-                log.write(f"{species}\n")
-            continue
 
-        # Sort RefSeq assemblies by assembly level
-        refseq.sort(key=assembly_priority, reverse=True)
-
-        # Write top 2 RefSeq assemblies (main + backup)
-        for rank, rep in enumerate(refseq[:2], start=1):
+def write_output(
+    output: Path,
+    species: str,
+    refseq: list[dict],
+    max_hits: int = 2,
+) -> None:
+    with output.open("w") as out:
+        out.write("species\tassembly_accession\trank\n")
+        for rank, rep in enumerate(refseq[:max_hits], start=1):
             acc = rep["current_accession"]
             out.write(f"{species}\t{acc}\t{rank}\n")
+
+
+def main() -> None:
+    data = load_summary(INPUT)
+    species, refseq = select_refseq_assemblies(data)
+    write_output(OUTPUT, species, refseq)
+
+
+if __name__ == "__main__":
+    main()

@@ -6,7 +6,9 @@
 # 1st part of pipeline
 
 #Input: list of species names in ../data/short_taxonomy.csv
-# Output: ../data/proteomes/selection with selected assemblies for select the best assemblies in select_best_assemblies.py
+# Output: ../data/proteomes/selection/files with selected assemblies for select the best assemblies in select_best_assemblies.py
+
+# one specie -> one summary.json
 
 # Next step: select_best_assemblies.py
 
@@ -18,25 +20,45 @@ set -euo pipefail
 INPUT=$1
 OUTPUT=$2
 
-# Set output and input directories/files
-mkdir -p "$OUTPUT" ./logs
+if [[ -z "${INPUT}" || -z "${OUTPUT}" ]]; then
+    echo "Usage: select_genomes.sh <species_name> <output_json>"
+    exit 1
+fi
+
+# CREATE temp file
+TMP=$(mktemp)
 
 # Set logging
 LOG="selecting_assemblies.log"
-: > "$LOG" # clear log file
 
-# read species names line by line from the input file
-while IFS= read -r SPECIES; do
-    [[ -z "$SPECIES" ]] && continue
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG}"
+}
 
-    SAFE=$(echo "$SPECIES" | tr ' /' '__')
-    TMP=$(mktemp)
+err() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" | tee -a "${LOG}" >&2
+}
 
-    if datasets summary genome taxon "$SPECIES" > "$TMP"; then
-        mv "$TMP" "${OUTPUT}/${SAFE}_summary.json"
+
+log "Starting genome selection"
+log "Species: ${INPUT}"
+log "Output: ${OUTPUT}"
+
+
+if datasets summary genome taxon "$INPUT" > "${TMP}"; then
+    # save only when JSON is not empty
+    if [[ -s "${TMP}" ]]; then
+        mv "${TMP}" "${OUTPUT}"
+        log "Summary saved to ${OUTPUT}"
+
     else
-        echo "$SPECIES" >> "$LOG"
-        rm -f "$TMP"
-    fi
+        err "Empty result returned for species: ${INPUT}"
 
-done < "$INPUT"
+        rm -f "${TMP}"
+        exit 2
+    fi
+else
+    err "datasets command failed for species: ${INPUT}"
+    rm -f "${TMP}"
+    exit 3
+fi
