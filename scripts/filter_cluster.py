@@ -21,28 +21,25 @@ Paralogous clusters are filtered out by rejecting any cluster that contains more
 from collections import defaultdict
 import argparse
 from pathlib import Path
-from tqdm import tqdm
+import sys
 
-# ~~~~~ Paths ~~~~~
-parser = argparse.ArgumentParser(
-    description="Script to generate filtered gene families from MMseqs2 clustering output."
-)
 
-parser.add_argument(
-    "--input",
-    type=Path,
-    required=True,
-    help="Path to folder .tsv file *_cluster.tsv (MMseqs2 output)",
-)
+# ~~~~~ Arguments ~~~~~
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Script to generate filtered gene families from MMseqs2 clustering output."
+    )
 
-parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--input",
+        type=Path,
+        required=True,
+        help="Path to clusters_clusters.tsv file (MMseqs2 output)",
+    )
 
-args = parser.parse_args()
-INPUT = Path(args.input)
-OUTPUT = Path(args.output)
-OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-LOG = Path(OUTPUT.parent / "filter_cluster.log")
-LOG.write_text("")
+    parser.add_argument("--output", required=True, type=Path)
+
+    return parser.parse_args()
 
 
 # ~~~~~~ Functions ~~~~~
@@ -63,7 +60,15 @@ def load_clusters(input_file: Path) -> dict:
     return clusters
 
 
-if __name__ == "__main__":
+# ~~~~~ Main logic ~~~~~
+
+
+def main():
+    args = parse_args()
+    INPUT = Path(args.input)
+    OUTPUT = Path(args.output)
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+
     clusters = load_clusters(
         INPUT
     )  # read clusters from MMSeqs2 output: <member_sequence_id>    <representative_sequence_id>
@@ -78,9 +83,7 @@ if __name__ == "__main__":
     with OUTPUT.open("w") as outfile:
         outfile.write("cluster_id\tspecie\tgene_id\n")
 
-        for rep_id, members in tqdm(
-            clusters.items(), desc="Filtering clusters", unit="clusters"
-        ):
+        for rep_id, members in clusters.items():
             species = [
                 species_from_id(gene_id) for gene_id in members
             ]  # species present in the current cluster
@@ -90,7 +93,8 @@ if __name__ == "__main__":
                 for gene in members:
                     outfile.write(f"{rep_id}\t{species_from_id(gene)}\t{gene}\n")
             else:
-                with LOG.open("a") as logfile:
-                    logfile.write(
-                        f"Cluster {rep_id} skipped: {len(members)} members from {len(set(species))} species (needed: {N_GENOMES})\n"
-                    )
+                continue
+
+
+if __name__ == "__main__":
+    main()

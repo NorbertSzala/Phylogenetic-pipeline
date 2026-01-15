@@ -1,62 +1,68 @@
 #!/usr/bin/env python3
-#
-# # Script to download proteome sequences from NCBI given on list with selected genomes from select_best_assemblies.py
-# 3rd part of pipeline
+"""
+Download proteome (.faa) from NCBI for one species based on ranked RefSeq assemblies.
 
-# input: ranked selected_assemblies.tsv from select_best_assemblies.py
-# Output: ../data/proteomes/sequences - .faa protein sequences
+Input:
+    - One TSV file from select_best_assemblies.py
+    (species, assembly_accession, rank)
 
+Output:
+    - One <species>.faa file written to output directory
+
+Errors:
+    - Reported via stderr
+    - Non-zero exit code on failure (Nextflow-compatible)
+"""
 
 # ~~~~~ Imports ~~~~~
 import subprocess
 from pathlib import Path
 from collections import defaultdict
-from tqdm import tqdm
 import argparse
+import sys
+import shutil
 
 
-# ~~~~~ Paths ~~~~~
-parser = argparse.ArgumentParser(description="Download genomes basing on givel GCF id.")
-
-parser.add_argument(
-    "--input",
-    type=Path,
-    required=True,
-    help="TSV file with ranked specie's RefSeqs assemblies",
-)
-
-parser.add_argument(
-    "--output_zipped",
-    required=True,
-    help="Path where to save raw downloaded files from NCBI",
-)
-
-parser.add_argument(
-    "--output_sequences",
-    type=Path,
-    required=True,
-    help="Path where to save extracted .faa proteomes sequences",
-)
-
-args = parser.parse_args()
-INPUT = Path(args.input)
-OUTPUT_ZIPPED = Path(args.output_zipped)
-OUTPUT_ZIPPED.mkdir(parents=True, exist_ok=True)
-
-OUTPUT_SEQUENCES = Path(args.output_sequences)
-OUTPUT_SEQUENCES.mkdir(parents=True, exist_ok=True)
-
-LOG = OUTPUT_ZIPPED / "download_failed.log"
-LOG.write_text("")  # clear log file
-
-
-INCLUDE = "protein,gff3,genome,seq-report"
+# ~~~~~ Argument parsing ~~~~~
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Download proteome for one species from ranked RefSeq assemblies"
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        required=True,
+        help="TSV file with ranked RefSeq assemblies (one species)",
+    )
+    parser.add_argument(
+        "--output_zipped",
+        type=Path,
+        required=True,
+        help="Directory for downloaded NCBI zip files",
+    )
+    parser.add_argument(
+        "--output_sequences",
+        type=Path,
+        required=True,
+        help="Directory for output .faa proteome",
+    )
+    return parser.parse_args()
 
 
 # ~~~~~ functions ~~~~~
+INCLUDE = "protein,gff3,genome,seq-report"
+
+
 def safe_name(name: str) -> str:
     """Change spaces and '/' to '__' - safe file names."""
-    return name.replace(" ", "__").replace("/", "__")
+    return name.replace(" ", "_").replace("/", "_")
+
+
+def check_dependencies():
+    if shutil.which("datasets") is None:
+        sys.exit("Required program 'datasets' not found in PATH")
+    if shutil.which("unzip") is None:
+        sys.exit("Required program 'unzip' not found in PATH")
 
 
 def download(accession: str, out_zip: Path) -> bool:
@@ -82,7 +88,7 @@ def download(accession: str, out_zip: Path) -> bool:
 
 
 def extract_protein_faa(
-    zip_path: Path, accession: str, species_safe: str, OUTPUT: Path
+    zip_path: Path, accession: str, species_safe: str, out_dir: Path
 ) -> bool:
     """
     Unzip NCBI datasets archive and extract protein.faa.
@@ -107,51 +113,79 @@ def extract_protein_faa(
         return False
 
     # 2. Copy and rename protein.faa
-    out_faa = OUTPUT / f"{species_safe}.faa"
-    out_faa.write_bytes(protein_path.read_bytes())
+    out_faa = out_dir / f"{species_safe}.faa"
+    with protein_path.open() as inp, out_faa.open("w") as out:
+        for line in inp:
+            if line.startswith(">"):
+                gene_id = line[1:].strip().split()[0]
+                out.write(f">{species_safe}|{gene_id}\n")
+            else:
+                out.write(line)
 
     return True
 
 
-# ~~~~~ Read tsv input ~~~~~
-print("#3. Downloading selected assemblies")
-
-assemblies = defaultdict(list)
+# ~~~~~ Main logic ~~~~~
 
 
-with INPUT.open() as fh:
-    next(fh)  # leave header
-    for line in fh:
-        species, accession, rank = line.strip().split("\t")
-        assemblies[species].append((int(rank), accession))
+def main():
+    args = parse_args()
+    check_dependencies()  # check if all needed programmes are available
 
-# ~~~~~ Downloading ~~~~~
+    INPUT = args.input
+    OUT_ZIP = args.output_zipped
+    OUT_SEQ = args.output_sequences
 
-for species, items in tqdm(
-    assemblies.items(), total=len(assemblies), desc="Downloading assemblies"
-):
-    items.sort()  # rank 1 -> rank 2
-    safe = safe_name(species)
+    OUT_ZIP.mkdir(parents=True, exist_ok=True)
+    OUT_SEQ.mkdir(parents=True, exist_ok=True)
 
-    success = False
+    assemblies = defaultdict(list)
+
+    try:
+        with INPUT.open() as fh:
+            next(fh)  # leave header
+            for line in fh:
+                species, accession, rank = line.strip().split("\t")
+                assemblies[species].append((int(rank), accession))
+
+    except Exception as e:
+        sys.exit(f"Failed to read TSV file {INPUT}: {e}")
+
+    if not assemblies:
+        sys.exit(f"No assemblies found in {INPUT}")
+
+    # one species per TSV by design
+    if len(assemblies) != 1:
+        sys.exit(
+            "Input TSV contains more than one species — "
+            "this violates the pipeline contract"
+        )
+
+    species, items = next(iter(assemblies.items()))
+    species_safe = safe_name(species)
+
+    items.sort()  # rank 1 first
 
     for rank, accession in items:
-        zip_path = OUTPUT_ZIPPED / f"{safe}_{accession}.zip"
-        faa_path = OUTPUT_SEQUENCES / f"{safe}.faa"
+        zip_path = OUT_ZIP / f"{species_safe}_{accession}.zip"
 
-        # if download successful, extract protein.faa
-        if download(accession, zip_path):
-            if extract_protein_faa(zip_path, accession, safe, OUTPUT_SEQUENCES):
-                success = True
-                break
+        if not download(accession, zip_path):
+            print(
+                f"Download failed (rank {rank}) for accession {accession}",
+                file=sys.stderr,
+            )
+        if extract_protein_faa(zip_path, accession, species_safe, OUT_SEQ):
+            # SUCCESS
+            return
 
-            else:
-                with LOG.open("a") as log:
-                    log.write(f"NO_PROTEOME\t{species}\t{accession}\n")
-        else:
-            with LOG.open("a") as log:
-                log.write(f"FAILED_RANK{rank}\t{species}\t{accession}\n")
+        print(
+            f"No protein.faa found (rank {rank}) for accession {accession}",
+            file=sys.stderr,
+        )
 
-    if not success:
-        with LOG.open("a") as log:
-            log.write(f"FAILED_ALL\t{species}\n")
+    # if we reach h ere → all ranks failed
+    sys.exit(f"All RefSeq assemblies failed for species: {species}")
+
+
+if __name__ == "__main__":
+    main()

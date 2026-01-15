@@ -11,7 +11,10 @@ params.bootstrap = false
 params.bootstrap_reps = 1000
 params.min_support = 70
 params.max_bad_frac = 0.3
-
+params.min_seq_id_mmseqs = 0.3
+params.c_mmseqs = 0.8
+params.cov_mode_mmseqs = 1
+params.max_clusters = 50
 
 
 workflow {
@@ -31,58 +34,97 @@ workflow {
     // 3. select best assemblies
     assemblies_ch = select_best_assemblies(summaries_ch)
 
-    assemblies_ch.view { it.text }
-
-    // //4. download proteomes
-    // proteomes_ch = download_genomes(assemblies_tsv)
+    //4. download proteomes
+    proteomes_ch = download_genomes(assemblies_ch)
     
-    // //5. rCreate gene to species mapping
-    // create_mapping(proteomes_ch.sequences)
+    //5. rCreate gene to species mapping
+    gene_maps_ch = create_mapping(proteomes_ch)
 
-    // //6. run mmseqs2 to make 'BLAST' and create gene families
-    // clusters_ch = run_mmseqs(proteomes_ch.sequences)
+    //merge all outputs to single file
+    gene_maps_file_ch = gene_maps_ch
+        .collectFile(
+            name: "gene_to_species.tsv",
+            storeDir: "results/mapping",
+            newLine:true
+        )
 
-    // //7. filter orthologous genes (1-to-1)
-    // orthologs_ch = filter_orthologs(clusters_ch.clusters)
+    //6. run mmseqs2 to make 'BLAST' and create gene families
+    // collect all proteomes into single file 
+    merged_faa_ch = proteomes_ch.collectFile(
+        name: 'all_proteomes.faa'
+    )
+    clusters_ch = run_mmseqs(merged_faa_ch)
 
-    // //8 Extract cluster ids  from othologs
-    // cluster_ids_ch = orthologs_ch
-    //     .splitCsv(header: true, sep: '\t')
-    //     .map { row -> row.cluster_id }
-    //     .distinct()
+    //7. filter orthologous genes (1-to-1). returns orthologs1to1.tsv
+    orthologs_ch = filter_orthologs(clusters_ch.clusters)
+
+    //8 Extract cluster ids  from othologs (tsv file)
+    cluster_ids_ch = orthologs_ch
+        .splitCsv(header: true, sep: '\t')
+        .map { row ->
+            def cid = row['cluster_id']
+            def safe = cid.replace('|','_').replace('.','_')
+            tuple(cid, safe)
+        }
+        .distinct { it[0] }
+        .take(params.max_clusters)
 
 
-    // //9. Make alignemnt (MAFFT) on clusters)
-    // fasta_inputs_ch = cluster_ids_ch
-    //     .combine(orthologs_ch)
-    //     .combine(clusters_ch.allproteomes)
-    //     .map { a, b, c, d -> tuple(a, b, c, d) }
+
+    //9. Make alignemnt (MAFFT) on clusters)
+    // orthologs_ch and merged_faa_ch are singleton channels
+    fasta_inputs_ch = cluster_ids_ch
+
     
-    // fasta_ch = make_clusters_fasta(fasta_inputs_ch)
+    fasta_ch = make_clusters_fasta(fasta_inputs_ch)
+    aln_ch = mafft_align(fasta_ch)
 
-    // aln_ch = mafft_align(fasta_ch)
+    //10. Count ML trees on given alignments. One alignment per one script execution
+    trees_ch = gene_tree_ml(aln_ch)
 
-    // //10. Count ML trees on given alignments. One alignment per one script execution
-    // trees_ch = gene_tree_ml(aln_ch)
+    //11. Filter trees only if they were made using bootstrap method. Otherwise return trees_ch (previous output)
+    trees_stream_ch = trees_ch.flatten()
 
-    // //11. Filter trees only if they were made using bootstrap method. Otherwise return trees_ch (previous output)
-    // trees_stream_ch = trees_ch.flatten()
-    // trees_stream_ch.view { it.name }
+    filtered_trees_ch = params.bootstrap \
+        ? filter_gene_trees(trees_stream_ch) \
+        : trees_stream_ch
 
-    // filtered_trees_ch = params.bootstrap \
-    //     ? filter_gene_trees(trees_stream_ch) \
-    //     : trees_stream_ch
+    // 12. Trim fasta headers to unambigous names and concatenate alignments
+    // tuple (cluster_id, path) -> path)
+    trimmed_aln_ch = trim_alignment_headers(aln_ch)
 
+    trimmed_paths_ch = trimmed_aln_ch
+        .map { cluster_id, aln -> aln }
+        .collect()
+
+    species_order_file_ch = channel.fromPath(params.taxonomy)
+
+    supermatrix_ch = concatenate_alignments(
+        trimmed_paths_ch,
+        species_order_file_ch
+    )
+
+
+    // 13. Make species_tree  
+    species_tree(supermatrix_ch)
+
+    // 14. Consensus tree. Collect all gene trees into one channel
+    tree_paths_ch = trees_ch.map { cid, tree -> tree }
+    
+    filtered_tree_paths_ch = params.bootstrap \
+        ? filter_gene_trees(tree_paths_ch) \
+        : tree_paths_ch
+
+    consensus_tree_ch = gene_tree_consensus(filtered_tree_paths_ch.collect())
 
 }
-
 
 
 process select_genomes {
 
     tag { species }
     // Copy output to that path
-    publishDir "data/proteomes", mode: 'copy'
+    publishDir "data/proteomes/candidates", mode: 'copy'
 
     input:
     val species
@@ -106,7 +148,7 @@ process select_genomes {
 process select_best_assemblies {
     tag { summary.simpleName }
 
-    publishDir "data/proteomes", mode: 'copy'
+    publishDir "data/proteomes/assemblies", mode: 'copy'
 
     input:
     path summary
@@ -124,39 +166,42 @@ process select_best_assemblies {
 
 
 process download_genomes {
-    publishDir "data/proteomes", mode: 'copy'
+    tag { best_assembly_tsv.simpleName }
+    
+    publishDir "data/proteomes/sequences", mode: 'copy'
 
     input:
-    path assemblies_tsv
-
+    path best_assembly_tsv
     
     output:
-    path 'zipped', emit: zipped
-    path 'sequences', emit: sequences
+    path "*.faa"
 
     script:
     """
     python3 ${projectDir}/scripts/download_genomes.py \
-        --input ${assemblies_tsv} \
+        --input ${best_assembly_tsv} \
         --output_zipped zipped \
-        --output_sequences sequences
+        --output_sequences .
     """
 }
 
 process create_mapping {
-    publishDir "results/mapping", mode: 'copy'
+    tag { proteome.simpleName }
+
+    publishDir "results/mapping/gene_to_species", mode: 'copy'
     
     input:
-    path proteome_sequences
+    path proteome
     
     output:
-    file 'gene_to_species.tsv'
+    path "${proteome.simpleName}.gene_to_species.tsv"
+
 
     script:
     """
     python3 ${projectDir}/scripts/create_mapping_gene_to_specie.py \
-        --input ${proteome_sequences} \
-        --output gene_to_species.tsv
+        --input ${proteome} \
+        --output "${proteome.simpleName}.gene_to_species.tsv"
     """
 }
 
@@ -166,21 +211,23 @@ process run_mmseqs {
     publishDir "results/clusters/mmseqs2", mode: 'copy'
 
     input:
-    path proteome_sequences
+    path merged_faa
 
     output:
     path "clusters_cluster.tsv", emit: clusters
     path "clusters_rep_seq.fasta", emit: repseq
-    path "all_proteomes.faa", emit: allproteomes
 
     script:
     """
     mkdir -p tmp
 
-    python3 ${projectDir}/scripts/make_BLAST-like_clusters.py \
-        --input ${proteome_sequences} \
-        --output clusters \
-        --tmp tmp
+    mmseqs easy-cluster \
+        ${merged_faa} \
+        clusters \
+        tmp \
+        --min-seq-id ${params.min_seq_id_mmseqs} \
+        -c ${params.c_mmseqs} \
+        --cov-mode ${params.cov_mode_mmseqs}
     """
 }
 
@@ -202,37 +249,39 @@ process filter_orthologs {
     """
 }
 
-
 process make_clusters_fasta {
-    maxForks 20
+
+    tag { safe }
+    publishDir "results/clusters/fasta", mode: 'copy'
     cpus 4
 
     input:
-    tuple val(cluster_id), path(orthologs), path(proteomes)
-
+    tuple val(cluster_id), val(safe)
 
     output:
-    path "${cluster_id.replace('|','_')}.faa"
+    tuple val(cluster_id), path("${safe}.faa")
 
     script:
     """
     python3 ${projectDir}/scripts/create_fasta_from_clusters.py \
         --cluster_id '${cluster_id}' \
-        --orthologs ${orthologs} \
-        --proteomes ${proteomes} \
-        --output ${cluster_id.replace('|','_')}.faa
+        --orthologs ${workflow.projectDir}/results/clusters/orthologs1to1.tsv \
+        --proteomes ${workflow.projectDir}/results/clusters/mmseqs2/all_proteomes.faa \
+        --output ${safe}.faa
     """
 }
 
 
+
 process mafft_align {
     publishDir "results/alignments", mode: 'copy'
+    cpus 4
 
     input:
-    path fasta
+    tuple val(cluster_id), path(fasta)
 
     output:
-    path "${fasta.simpleName}.aln.faa"
+    tuple val(cluster_id), path("${fasta.simpleName}.aln.faa"), emit: aln
 
     script:
     """
@@ -241,9 +290,41 @@ process mafft_align {
 }
 
 // remember to make two executions - with and without bootstrap
+// process gene_tree_ml {
+//     // Adjust path depending on params.bootstrap. Returns folder path
+//     // ? means or. If params.bootstrap is True, use first value, else second one
+//     publishDir {
+//         params.bootstrap ?
+//         "results/gene_trees/bootstrap" :
+//         "results/gene_trees/no_bootstrap"
+//     }, mode: 'copy'
+
+//     cpus 4
+//     memory '4 GB'
+//     time '2h'
+
+//     input: //one alignemnt = one tree
+//     path aln
+    
+//     output: //remove last extension and add your own A.aln.faa -> A.aln.treefile
+//     path "${aln.simpleName}.treefile"
+
+//     script:
+//     def bootstrap_flag = params.bootstrap ? "-B ${params.bootstrap_reps}" : ""
+
+//     """
+//     iqtree2 \
+//         -s ${aln} \
+//         -m MFP \
+//         -nt ${task.cpus} \
+//         ${bootstrap_flag} \
+//         -pre ${aln.simpleName} \
+//         -quiet
+//     """
+// }
+
+
 process gene_tree_ml {
-    // Adjust path depending on params.bootstrap. Returns folder path
-    // ? means or. If params.bootstrap is True, use first value, else second one
     publishDir {
         params.bootstrap ?
         "results/gene_trees/bootstrap" :
@@ -254,11 +335,11 @@ process gene_tree_ml {
     memory '4 GB'
     time '2h'
 
-    input: //one alignemnt = one tree
-    path aln
-    
-    output: //remove last extension and add your own A.aln.faa -> A.aln.treefile
-    path "${aln.simpleName}.treefile"
+    input:
+    tuple val(cluster_id), path(aln)
+
+    output:
+    tuple val(cluster_id), path("${aln.simpleName}.treefile"), emit: tree
 
     script:
     def bootstrap_flag = params.bootstrap ? "-B ${params.bootstrap_reps}" : ""
@@ -269,10 +350,14 @@ process gene_tree_ml {
         -m MFP \
         -nt ${task.cpus} \
         ${bootstrap_flag} \
-        -pre ${aln.simpleName} \
+        -pre tree \
         -quiet
+
+    # IQ-TREE always writes: tree.treefile
+    mv tree.treefile ${aln.simpleName}.treefile
     """
 }
+
 
 process filter_gene_trees  {
     publishDir "results/filtered_trees", mode:"copy"
@@ -295,6 +380,96 @@ process filter_gene_trees  {
 }
 
 
+process trim_alignment_headers {
+
+    input:
+    tuple val(cluster_id), path(aln)
+
+    output:
+    tuple val(cluster_id), path("${aln.simpleName}.trimmed.faa")
+
+    script:
+    """
+    python3 ${projectDir}/scripts/trim_alignment_headers.py \
+        --input ${aln} \
+        --output ${aln.simpleName}.trimmed.faa
+    """
+}
+
+
+process concatenate_alignments {
+
+    publishDir "results/species_tree", mode: 'copy'
+
+    input:
+    path trimmed_alignments
+    path species_order
+
+    output:
+    path "supermatrix.faa"
+
+    script:
+    """
+    python3 ${projectDir}/scripts/concatenate_alignments.py \
+        --inputs ${trimmed_alignments} \
+        --species-order ${species_order} \
+        --output supermatrix.faa
+    """
+}
+
+
+
+
+process species_tree {
+
+    publishDir "results/species_tree", mode: 'copy'
+
+    input:
+    path supermatrix
+
+    output:
+    path "species_tree.treefile"
+
+    script:
+    """
+    iqtree2 \
+        -s ${supermatrix} \
+        -st AA \
+        -m MFP \
+        -nt AUTO \
+        -B 1000 \
+        -pre species_tree
+    """
+}
+
+
+process gene_tree_consensus {
+
+    publishDir "results/species_tree/consensus", mode: "copy"
+
+    input:
+    path treefiles
+
+    output:
+    path "gene_tree_consensus.treefile"
+
+    script:
+    """
+    # create list of gene trees
+    for t in ${treefiles}; do
+        echo \$t
+    done > gene_trees.list
+
+    # Majority-rule consensus (50%)
+    iqtree2 \
+        -t gene_trees.list \
+        -con \
+        -pre gene_tree_consensus \
+        -quiet
+    """
+}
+
+
 // process  {
 //     input:
 //     path
@@ -309,7 +484,6 @@ process filter_gene_trees  {
 // }
 
 
-// #TODO: te od serpula mają błąd w mazwie -> ujednolić jakoś 
-// # TODO: usun podwójne podłogi __.
-// TODO: zoptymalizuj wszystkie procesy tak by każdy z nich przyjmował JEDEN plik jako input a nie cały folder
-// TODO: przeanalizuj każdy skrypt od początku do końca
+// TODO: Konsensus drzew genowych
+// TODO: Astral - supertree
+// TODO: opracować metodę gdy będzie mało klastrów 1-1 (poczekać)

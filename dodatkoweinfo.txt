@@ -1,0 +1,2 @@
+consensus do nieukorzenionych. Slaid czy dwa do strony technicznej
+nie licz drzew konsensusowych z drzew bootstrapowych
