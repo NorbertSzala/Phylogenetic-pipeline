@@ -15,200 +15,291 @@ params.min_seq_id_mmseqs = 0.3
 params.c_mmseqs = 0.8
 params.cov_mode_mmseqs = 1
 params.max_clusters = 50
-
+params.max_missing = 1
+params.n_genomes = 4 // edytuj potem przy pelnym projekcie
+params.astral_jar = "tools/astral.jar"
+params.min_strict_clusters_for_consensus = 30
+params.pick_representative = "longest"  // jak rozwiązywać paralogi
+params.consensus_mode = "strict"   // strict | relaxed
 
 workflow {
     // 1. input taxonomy file
     // taxonomy_ch = channel.fromPath(params.taxonomy)
 
-    // 2. select genome assemblies (JNOS summaries)
-    // CSV file -> species stream. Parse species one by one
-    species_ch = channel
+    /*
+     2. Select genome assemblies (JNOS summaries)
+            input : species
+            output: tuple(species, summaries.tsv)
+     */
+    species_ch = Channel
         .fromPath(params.taxonomy)
         .splitText()
-        .map { it.trim() }
+        .map { it.trim().replaceAll(/\r/, '') }
         .filter { it }
+    
+    species_ch.view { "SPECIES='${it}'" }
+
+
 
     summaries_ch = select_genomes(species_ch)
     
-    // 3. select best assemblies
+    /*
+      3. Select best assemblies
+            input : tuple(species, summaries.tsv)
+            output: tuple(species, assemblies.tsv)
+     */
     assemblies_ch = select_best_assemblies(summaries_ch)
 
-    //4. download proteomes
-    proteomes_ch = download_genomes(assemblies_ch)
+    /*
+     4. Download proteomes
+            input : tuple(species, assemblies.tsv)
+            output: tuple(species, proteome.faa, qc.tsv)
+     */
+    proteomes_ch = assemblies_ch | download_genomes
     
-    //5. rCreate gene to species mapping
+    /*
+    5. Create gene to spciecies mapping
+        input:      tuple(species, proteome.faa, qc.tsv)
+        output:     gene_to_species.tsv
+    */
     gene_maps_ch = create_mapping(proteomes_ch)
 
     //merge all outputs to single file
     gene_maps_file_ch = gene_maps_ch
         .collectFile(
             name: "gene_to_species.tsv",
-            storeDir: "results/mapping",
+            storeDir: "${params.results}/mapping",
             newLine:true
         )
 
-    //6. run mmseqs2 to make 'BLAST' and create gene families
-    // collect all proteomes into single file 
-    merged_faa_ch = proteomes_ch.collectFile(
-        name: 'all_proteomes.faa'
-    )
+    /*
+    6. run mmseqs2 to make 'BLAST' and create gene families
+        collect all proteomes into single file 
+
+        input:tuple (species, proteome.faa, qc.tsv)
+        output: tuple(clusters_cluster.tsv, clusters_rep_seq.fasta)
+    */
+    merged_faa_ch = proteomes_ch
+        .map { species, proteome, qc -> proteome }
+        .collectFile(name: 'all_proteomes.faa',
+            sort: true)
+
     clusters_ch = run_mmseqs(merged_faa_ch)
 
-    //7. filter orthologous genes (1-to-1). returns orthologs1to1.tsv
-    orthologs_ch = filter_orthologs(clusters_ch.clusters)
-
-    //8 Extract cluster ids  from othologs (tsv file)
-    cluster_ids_ch = orthologs_ch
-        .splitCsv(header: true, sep: '\t')
-        .map { row ->
-            def cid = row['cluster_id']
-            def safe = cid.replace('|','_').replace('.','_')
-            tuple(cid, safe)
-        }
-        .distinct { it[0] }
-        .take(params.max_clusters)
 
 
+    /*
+    7. Filter orthologous genes (1 to 1)
 
-    //9. Make alignemnt (MAFFT) on clusters)
-    // orthologs_ch and merged_faa_ch are singleton channels
-    fasta_inputs_ch = cluster_ids_ch
-
-    
-    fasta_ch = make_clusters_fasta(fasta_inputs_ch)
-    aln_ch = mafft_align(fasta_ch)
-
-    //10. Count ML trees on given alignments. One alignment per one script execution
-    trees_ch = gene_tree_ml(aln_ch)
-
-    //11. Filter trees only if they were made using bootstrap method. Otherwise return trees_ch (previous output)
-    trees_stream_ch = trees_ch.flatten()
-
-    filtered_trees_ch = params.bootstrap \
-        ? filter_gene_trees(trees_stream_ch) \
-        : trees_stream_ch
-
-    // 12. Trim fasta headers to unambigous names and concatenate alignments
-    // tuple (cluster_id, path) -> path)
-    trimmed_aln_ch = trim_alignment_headers(aln_ch)
-
-    trimmed_paths_ch = trimmed_aln_ch
-        .map { cluster_id, aln -> aln }
-        .collect()
-
-    species_order_file_ch = channel.fromPath(params.taxonomy)
-
-    supermatrix_ch = concatenate_alignments(
-        trimmed_paths_ch,
-        species_order_file_ch
+        input:      clusters from mmseqs2
+        output:     orthologs_relaxed.tsv
+    * STRICT orthologs (true 1-to-1)
+    */
+    strict = orthology_pipeline(
+        clusters_ch.clusters,
+        merged_faa_ch,
+        0,
+        "strict"
     )
 
+    /*
+    * RELAXED orthologs (N–k, pseudo-single-copy)
+    */
+    relaxed = orthology_pipeline(
+        clusters_ch.clusters,
+        merged_faa_ch,
+        params.max_missing,
+        "relaxed")
 
-    // 13. Make species_tree  
-    species_tree(supermatrix_ch)
 
-    // 14. Consensus tree. Collect all gene trees into one channel
-    tree_paths_ch = trees_ch.map { cid, tree -> tree }
-    
-    filtered_tree_paths_ch = params.bootstrap \
-        ? filter_gene_trees(tree_paths_ch) \
-        : tree_paths_ch
+    /*
+    * STRICT → consensus (IQ-TREE)
+    */
+    strict_species_tree_ch = strict.trees
+        .map { cid, tree -> tree }
+        | strip_gene_ids_from_trees
+        | collectFile(name: "gene_trees.strict.list", newLine: true)
+        | consensus_tree
 
-    consensus_tree_ch = gene_tree_consensus(filtered_tree_paths_ch.collect())
 
+
+    /*
+    * 18. Build supertree (ASTRAL) from RELAXED gene trees
+    */
+    astral_input_ch = relaxed.trees
+        .map { cid, tree -> tree }
+        .collectFile(
+            name: 'all_gene_trees.relaxed.tre',
+            newLine: true
+        )
+
+    astral_clean_ch = prepare_astral_trees(astral_input_ch)
+    astral_tree_ch  = astral_tree(astral_clean_ch)
+
+
+    // Count statistics after run
+    relaxed_tree_list_ch = relaxed.trees
+    .map { cid, tree -> tree }
+    .collectFile(name: "gene_trees.relaxed.tre", newLine:true)
+
+    tree_stats(relaxed_tree_list_ch)
+
+}
+
+// subworkflow
+workflow orthology_pipeline {
+
+    take:
+        clusters_ch
+        merged_faa_ch
+        max_missing
+        label
+
+    main:
+
+        /*
+         * Filter orthologs with given missing-data tolerance
+         */
+        orthologs_ch = label == "strict"
+            ? filter_orthologs_strict(clusters_ch)
+            : filter_orthologs_relaxed(clusters_ch)
+
+
+
+        /*
+        * 8. Extract cluster IDs
+            input:      orthologs_relaxed.tsv
+            output:     Channel< tuple(cluster_id, safe_cluster_id) >
+        */
+        cluster_ids_ch = orthologs_ch
+            .splitCsv(header: true, sep: '\t')
+            .map { row ->
+                def cid = row.cluster_id
+                def safe = cid.replace('|','_').replace('.','_')
+                tuple(cid, "${safe}.${label}")
+            }
+            .distinct { it[0] }
+            .take(params.max_clusters)
+
+
+        /* 9. Create per-cluster FASTA files
+        input:
+            tuple(cluster_id, safe_cluster_id)
+            orthologs_relaxed.tsv
+            all_proteomes.faa
+        output:
+            tuple(cluster_id, cluster_sequences.faa)
+        */
+        fasta_ch = label == "strict"
+            ? cluster_ids_ch.combine(orthologs_ch).combine(merged_faa_ch) | make_clusters_fasta_strict
+            : cluster_ids_ch.combine(orthologs_ch).combine(merged_faa_ch) | make_clusters_fasta_relaxed
+
+
+        /* 10. Make alignemnt (MAFFT) on clusters)
+            input:      fassta_ch - one FASTA file with sequences for a single cluster
+            output:     alignments
+        */
+        aln_ch = label == "strict"
+            ? mafft_align_strict(fasta_ch)
+            : mafft_align_relaxed(fasta_ch)
+
+
+        /*11. Count ML trees on given alignments. 
+            input:      tuple val(cluster_id), path(aln)
+            ouptut:     tuple val(cluster_id, treefiles)    
+        */
+        trees_ch = label == "strict"
+            ? gene_tree_ml_strict(aln_ch)
+            : gene_tree_ml_relaxed(aln_ch)
+
+
+    emit:
+        trees = trees_ch
+        alignments = aln_ch
 }
 
 
 process select_genomes {
 
-    tag { species }
-    // Copy output to that path
-    publishDir "data/proteomes/candidates", mode: 'copy'
+    tag "${species}"
+
 
     input:
     val species
 
     output:
-    path "${species.replaceAll(' ', '_')}.summary.json"
-
+        tuple val(species), path("*.summary.json")
 
     script:
-    def safe = species.replaceAll(' ', '_')
-
     """
-    ls ./
     bash ${projectDir}/scripts/select_genomes.sh \
         "${species}" \
-        "${safe}.summary.json"
+        "${species.replaceAll(' ', '_')}.summary.json"
     """
 }
 
 
-process select_best_assemblies {
-    tag { summary.simpleName }
 
-    publishDir "data/proteomes/assemblies", mode: 'copy'
+process select_best_assemblies {
+
+    tag "${species}"
 
     input:
-    path summary
+        tuple val(species), path(summary_json)
 
     output:
-    file "${summary.simpleName}.assemblies.tsv"
+        tuple val(species), path("*.assemblies.tsv")
 
     script:
     """
-    python3  ${projectDir}/scripts/select_best_assemblies.py \
-        --input ${summary} \
-        --output "${summary.simpleName}.assemblies.tsv"
+    python3 ${projectDir}/scripts/select_best_assemblies.py \
+        --input ${summary_json} \
+        --output ${species.replaceAll(' ', '_')}.assemblies.tsv
     """
 }
 
 
 process download_genomes {
-    tag { best_assembly_tsv.simpleName }
-    
-    publishDir "data/proteomes/sequences", mode: 'copy'
+    tag "${species}"
+    publishDir { "${params.results}/proteomes/sequences/${species.replaceAll(' ','_')}" }, mode: 'copy'
+
 
     input:
-    path best_assembly_tsv
-    
+        tuple val(species), path(assemblies_tsv)
+        
     output:
-    path "*.faa"
+    tuple val(species), path("*.faa"), path("qc_summary.tsv")
 
     script:
-    """
-    python3 ${projectDir}/scripts/download_genomes.py \
-        --input ${best_assembly_tsv} \
-        --output_zipped zipped \
-        --output_sequences .
-    """
+        """
+        python3 ${projectDir}/scripts/download_genomes.py \
+        --input ${assemblies_tsv} \
+        --outdir .
+        """
 }
 
 process create_mapping {
-    tag { proteome.simpleName }
+    tag "${species}"
 
-    publishDir "results/mapping/gene_to_species", mode: 'copy'
-    
     input:
-    path proteome
+    tuple val(species), path(proteome), path(qc_tsv)
     
     output:
-    path "${proteome.simpleName}.gene_to_species.tsv"
+    tuple val(species), path("*gene_to_species.tsv")
 
 
     script:
     """
     python3 ${projectDir}/scripts/create_mapping_gene_to_specie.py \
         --input ${proteome} \
-        --output "${proteome.simpleName}.gene_to_species.tsv"
+        --output "${species.replaceAll(' ', '_')}.gene_to_species.tsv"
     """
 }
 
 
 process run_mmseqs {
 
-    publishDir "results/clusters/mmseqs2", mode: 'copy'
+    publishDir "${params.results}/clusters/mmseqs2", mode: 'copy'
 
     input:
     path merged_faa
@@ -223,65 +314,77 @@ process run_mmseqs {
 
     mmseqs easy-cluster \
         ${merged_faa} \
-        clusters \
+        mmseqs_out \
         tmp \
         --min-seq-id ${params.min_seq_id_mmseqs} \
         -c ${params.c_mmseqs} \
         --cov-mode ${params.cov_mode_mmseqs}
-    """
-}
-
-
-process filter_orthologs {
-    publishDir "results/clusters", mode: 'copy'
     
-    input:
-    path clusters
-
-    output:
-    file "orthologs1to1.tsv"
-
-    script:
-    """
-    python3 ${projectDir}/scripts/filter_cluster.py \
-        --input ${clusters} \
-        --output orthologs1to1.tsv
+    mv mmseqs_out_cluster.tsv clusters_cluster.tsv
+    mv mmseqs_out_rep_seq.fasta clusters_rep_seq.fasta
     """
 }
 
-process make_clusters_fasta {
 
-    tag { safe }
-    publishDir "results/clusters/fasta", mode: 'copy'
+
+process make_clusters_fasta_strict {
+
+    tag "${safe}.strict"
+    publishDir "${params.results}/clusters/fasta/strict", mode: 'copy'
     cpus 4
 
     input:
-    tuple val(cluster_id), val(safe)
+        tuple val(cluster_id), val(safe), path(orthologs_tsv), path(all_proteomes)
 
     output:
-    tuple val(cluster_id), path("${safe}.faa")
+        tuple val(cluster_id), path("${safe}.faa")
 
     script:
     """
     python3 ${projectDir}/scripts/create_fasta_from_clusters.py \
         --cluster_id '${cluster_id}' \
-        --orthologs ${workflow.projectDir}/results/clusters/orthologs1to1.tsv \
-        --proteomes ${workflow.projectDir}/results/clusters/mmseqs2/all_proteomes.faa \
+        --orthologs ${orthologs_tsv} \
+        --proteomes ${all_proteomes} \
+        --pick ${params.pick_representative} \
         --output ${safe}.faa
+
+    """
+}
+
+process make_clusters_fasta_relaxed {
+
+    tag "${safe}.relaxed"
+    publishDir "${params.results}/clusters/fasta/relaxed", mode: 'copy'
+    cpus 4
+
+    input:
+        tuple val(cluster_id), val(safe), path(orthologs_tsv), path(all_proteomes)
+
+    output:
+        tuple val(cluster_id), path("${safe}.faa")
+
+    script:
+    """
+    python3 ${projectDir}/scripts/create_fasta_from_clusters.py \
+        --cluster_id '${cluster_id}' \
+        --orthologs ${orthologs_tsv} \
+        --proteomes ${all_proteomes} \
+        --pick ${params.pick_representative} \
+        --output ${safe}.faa
+
     """
 }
 
 
-
-process mafft_align {
-    publishDir "results/alignments", mode: 'copy'
+process mafft_align_strict {
+    publishDir "${params.results}/alignments/strict", mode: 'copy'
     cpus 4
 
     input:
-    tuple val(cluster_id), path(fasta)
+        tuple val(cluster_id), path(fasta)
 
     output:
-    tuple val(cluster_id), path("${fasta.simpleName}.aln.faa"), emit: aln
+        tuple val(cluster_id), path("${fasta.simpleName}.aln.faa")
 
     script:
     """
@@ -289,14 +392,31 @@ process mafft_align {
     """
 }
 
+process mafft_align_relaxed {
+    publishDir "${params.results}/alignments/relaxed", mode: 'copy'
+    cpus 4
+
+    input:
+        tuple val(cluster_id), path(fasta)
+
+    output:
+        tuple val(cluster_id), path("${fasta.simpleName}.aln.faa")
+
+    script:
+    """
+    mafft --thread ${task.cpus} ${fasta} > ${fasta.simpleName}.aln.faa
+    """
+}
+
+
 // remember to make two executions - with and without bootstrap
 // process gene_tree_ml {
 //     // Adjust path depending on params.bootstrap. Returns folder path
 //     // ? means or. If params.bootstrap is True, use first value, else second one
 //     publishDir {
 //         params.bootstrap ?
-//         "results/gene_trees/bootstrap" :
-//         "results/gene_trees/no_bootstrap"
+//         "${params.results}/gene_trees/bootstrap" :
+//         "${params.results}/gene_trees/no_bootstrap"
 //     }, mode: 'copy'
 
 //     cpus 4
@@ -324,22 +444,17 @@ process mafft_align {
 // }
 
 
-process gene_tree_ml {
-    publishDir {
-        params.bootstrap ?
-        "results/gene_trees/bootstrap" :
-        "results/gene_trees/no_bootstrap"
-    }, mode: 'copy'
-
+process gene_tree_ml_strict {
+    publishDir "${params.results}/gene_trees/strict", mode: 'copy'
     cpus 4
     memory '4 GB'
     time '2h'
 
     input:
-    tuple val(cluster_id), path(aln)
+        tuple val(cluster_id), path(aln)
 
     output:
-    tuple val(cluster_id), path("${aln.simpleName}.treefile"), emit: tree
+        tuple val(cluster_id), path("${aln.simpleName}.treefile")
 
     script:
     def bootstrap_flag = params.bootstrap ? "-B ${params.bootstrap_reps}" : ""
@@ -353,122 +468,208 @@ process gene_tree_ml {
         -pre tree \
         -quiet
 
-    # IQ-TREE always writes: tree.treefile
+    mv tree.treefile ${aln.simpleName}.treefile
+    """
+}
+
+process gene_tree_ml_relaxed {
+    publishDir "${params.results}/gene_trees/relaxed", mode: 'copy'
+    cpus 4
+    memory '4 GB'
+    time '2h'
+
+    input:
+        tuple val(cluster_id), path(aln)
+
+    output:
+        tuple val(cluster_id), path("${aln.simpleName}.treefile")
+
+    script:
+    def bootstrap_flag = params.bootstrap ? "-B ${params.bootstrap_reps}" : ""
+
+    """
+    iqtree2 \
+        -s ${aln} \
+        -m MFP \
+        -nt ${task.cpus} \
+        ${bootstrap_flag} \
+        -pre tree \
+        -quiet
+
     mv tree.treefile ${aln.simpleName}.treefile
     """
 }
 
 
-process filter_gene_trees  {
-    publishDir "results/filtered_trees", mode:"copy"
+
+
+process filter_orthologs_strict {
+    publishDir "${params.results}/stats/filtering/strict", mode:'copy'
 
     input:
-    path tree
+        path clusters
+    output:
+        path "orthologs.tsv"
+        path "filter.stats.tsv"
+
+    script:
+    """
+    python3 ${projectDir}/scripts/filter_cluster.py \
+        --input ${clusters} \
+        --n_genomes ${params.n_genomes} \
+        --max_missing 0 \
+        --output orthologs.tsv
+    """
+}
+
+process filter_orthologs_relaxed {
+    publishDir "${params.results}/stats/filtering/relaxed", mode:'copy'
+    
+    input:
+        path clusters
+    output:
+        path "orthologs.tsv"
+        path "filter.stats.tsv"
+
+    script:
+    """
+    python3 ${projectDir}/scripts/filter_cluster.py \
+        --input ${clusters} \
+        --n_genomes ${params.n_genomes} \
+        --max_missing ${params.max_missing} \
+        --output orthologs.tsv
+    """
+}
+
+process tree_stats {
+
+    publishDir "${params.results}/stats/tree_stats", mode:'copy'
+
+    input:
+        path gene_trees
+
+    output:
+        path "tree_stats.tsv"
+
+    script:
+    """
+    awk '
+    {
+      gsub(/[();]/,"");
+      n=split($0,a,",");
+      print NR "\\t" n
+    }' ${gene_trees} > tree_stats.tsv
+    """
+}
+
+
+process strip_gene_ids_from_trees {
+    input:
+        path treefile
     
     output:
-    path "${tree.simpleName}.filtered.treefile"
-
+        path "stripped.treefile"
+    
     script:
     """
-    python3 ${projectDir}/scripts/reject_weak_trees.py \
-        --input ${tree} \
-        --output ${tree.simpleName}.filtered.treefile \
-        --min_support ${params.min_support} \
-        --max_bad_frac ${params.max_bad_frac}
-
+    sed -E 's/\\|[^,:)]*//g' ${treefile} > stripped.treefile
     """
 }
 
+process consensus_tree {
 
-process trim_alignment_headers {
+    /*
+     * Build a consensus species tree from multiple gene trees.
+     *
+     * This step implements a majority-rule consensus (50%) over
+     * individual gene trees inferred from orthologous clusters.
+     *
+     * Input :
+     *   - gene_tree_list : text file with one gene tree path per line
+     *
+     * Output:
+     *   - consensus.treefile : consensus species tree
+     *
+     * Notes:
+     *   - Works best when gene trees contain the same set of taxa
+     *     (e.g. strict 1-to-1 orthologs).
+     */
 
-    input:
-    tuple val(cluster_id), path(aln)
-
-    output:
-    tuple val(cluster_id), path("${aln.simpleName}.trimmed.faa")
-
-    script:
-    """
-    python3 ${projectDir}/scripts/trim_alignment_headers.py \
-        --input ${aln} \
-        --output ${aln.simpleName}.trimmed.faa
-    """
-}
-
-
-process concatenate_alignments {
-
-    publishDir "results/species_tree", mode: 'copy'
-
-    input:
-    path trimmed_alignments
-    path species_order
-
-    output:
-    path "supermatrix.faa"
-
-    script:
-    """
-    python3 ${projectDir}/scripts/concatenate_alignments.py \
-        --inputs ${trimmed_alignments} \
-        --species-order ${species_order} \
-        --output supermatrix.faa
-    """
-}
-
-
-
-
-process species_tree {
-
-    publishDir "results/species_tree", mode: 'copy'
+    publishDir "${params.results}/species_tree/consensus", mode:'copy'
 
     input:
-    path supermatrix
+        path gene_tree_list
 
     output:
-    path "species_tree.treefile"
+        path "consensus.treefile"
 
     script:
     """
     iqtree2 \
-        -s ${supermatrix} \
-        -st AA \
-        -m MFP \
-        -nt AUTO \
-        -B 1000 \
-        -pre species_tree
-    """
-}
-
-
-process gene_tree_consensus {
-
-    publishDir "results/species_tree/consensus", mode: "copy"
-
-    input:
-    path treefiles
-
-    output:
-    path "gene_tree_consensus.treefile"
-
-    script:
-    """
-    # create list of gene trees
-    for t in ${treefiles}; do
-        echo \$t
-    done > gene_trees.list
-
-    # Majority-rule consensus (50%)
-    iqtree2 \
-        -t gene_trees.list \
+        -t ${gene_tree_list} \
         -con \
-        -pre gene_tree_consensus \
+        -pre consensus \
         -quiet
+
+    # IQ-TREE writes consensus as *.contree
+    mv consensus.contree consensus.treefile
     """
 }
 
+process prepare_astral_trees {
+
+    input:
+        path gene_trees
+
+    output:
+        path "astral_input.tre"
+
+    script:
+    """
+    # 1) remove empty lines
+    # 2) strip gene IDs (|NP_xxx)
+    grep -v '^\\s*\$' ${gene_trees} \
+      | sed -E 's/\\|[^,:)]*//g' \
+      > astral_input.tre
+    """
+}
+
+process astral_tree {
+
+    /*
+     * Build a species tree using a supertree / summary method (ASTRAL).
+     *
+     * ASTRAL infers a species tree under the multispecies coalescent
+     * model using a collection of gene trees, allowing for:
+     *   - missing taxa
+     *   - gene tree discordance
+     *   - relaxed orthology (after paralog filtering)
+     *
+     * Input :
+     *   - all_gene_trees : single file containing all gene trees (Newick)
+     *
+     * Output:
+     *   - astral.treefile : species tree inferred by ASTRAL
+     *
+     * Notes:
+     *   - Particularly useful when strict 1-to-1 orthologs are scarce.
+     *   - Complements the consensus-based species tree.
+     */
+    publishDir "${params.results}/species_tree/astral", mode:'copy'
+
+    input:
+        path all_gene_trees
+
+    output:
+        path "astral.treefile"
+
+    script:
+    """
+    java -jar ${projectDir}/Astral/astral.5.7.8.jar \
+            -i ${all_gene_trees} \
+            -o astral.treefile
+    """
+}
 
 // process  {
 //     input:

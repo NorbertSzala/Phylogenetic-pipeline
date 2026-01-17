@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Download proteome (.faa) from NCBI for one species based on ranked RefSeq assemblies.
+Download and validate proteomes (.faa) from NCBI for one species based on ranked RefSeq assemblies.
 
 Input:
     - One TSV file from select_best_assemblies.py
@@ -12,6 +12,21 @@ Output:
 Errors:
     - Reported via stderr
     - Non-zero exit code on failure (Nextflow-compatible)
+
+Validation steps:
+1. Robust downloading with fallback over ranked assemblies
+2. Extraction of protein FASTA
+3. FAST proteome-level quality control (QC)
+4. Transparent logging of all decisions
+
+
+Design principles:
+- stdout  : structured, human-readable progress
+- stderr  : reasons for rejection / errors
+- outputs : ONLY data products (FASTA + TSV), never logs
+- exit 0  : proteome accepted
+- exit 1  : all assemblies rejected
+
 """
 
 # ~~~~~ Imports ~~~~~
@@ -23,10 +38,28 @@ import sys
 import shutil
 
 
+# ~~~~~ Paremeters ~~~~~
+MIN_PROTEINS = 4000
+MAX_PROTEINS = 30000
+MIN_MEAN_LEN = 250
+MIN_PROTEIN_LEN = 30
+MAX_SHORT_FRAC = 0.25
+
+NCBI_INCLUDE = "protein"
+
+
 # ~~~~~ Argument parsing ~~~~~
 def parse_args():
+    """
+    Parse command-line arguments.
+
+    Expected input:
+    - TSV with one species and ranked RefSeq assemblies
+    - output directories for archives and FASTA files
+    - path to log file (important for reproducibility)
+    """
     parser = argparse.ArgumentParser(
-        description="Download proteome for one species from ranked RefSeq assemblies"
+        description="Download proteome and make quality control for one species from ranked RefSeq assemblies"
     )
     parser.add_argument(
         "--input",
@@ -34,18 +67,19 @@ def parse_args():
         required=True,
         help="TSV file with ranked RefSeq assemblies (one species)",
     )
-    parser.add_argument(
-        "--output_zipped",
-        type=Path,
-        required=True,
-        help="Directory for downloaded NCBI zip files",
-    )
-    parser.add_argument(
-        "--output_sequences",
-        type=Path,
-        required=True,
-        help="Directory for output .faa proteome",
-    )
+    parser.add_argument("--outdir", type=Path, required=True, help="Output directory")
+    # parser.add_argument(
+    #     "--output_zipped",
+    #     type=Path,
+    #     required=True,
+    #     help="Directory for downloaded NCBI zip files",
+    # )
+    # parser.add_argument(
+    #     "--output_sequences",
+    #     type=Path,
+    #     required=True,
+    #     help="Directory for output .faa proteome",
+    # )
     return parser.parse_args()
 
 
@@ -53,19 +87,30 @@ def parse_args():
 INCLUDE = "protein,gff3,genome,seq-report"
 
 
-def safe_name(name: str) -> str:
+def safe_species_name(name: str) -> str:
     """Change spaces and '/' to '__' - safe file names."""
     return name.replace(" ", "_").replace("/", "_")
 
 
 def check_dependencies():
-    if shutil.which("datasets") is None:
-        sys.exit("Required program 'datasets' not found in PATH")
-    if shutil.which("unzip") is None:
-        sys.exit("Required program 'unzip' not found in PATH")
+    """Check required programmes"""
+    for prog in ["datasets", "unzip"]:
+        if shutil.which(prog) is None:
+            sys.exit(f"Required program not found: {prog}")
 
 
-def download(accession: str, out_zip: Path) -> bool:
+def run(cmd: list[str]) -> bool:
+    return (
+        subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,  # remove output, do not print to console
+            stderr=subprocess.DEVNULL,  # remove error output, do not print to console
+        ).returncode
+        == 0
+    )  # return true if download was successful
+
+
+def download_assembly(accession: str, out_zip: Path) -> bool:
     """Download genome assembly from NCBI using datasets CLI.. Returns True/False."""
     # Create command
     cmd = [
@@ -75,21 +120,14 @@ def download(accession: str, out_zip: Path) -> bool:
         "accession",
         accession,
         "--include",
-        INCLUDE,
+        NCBI_INCLUDE,
         "--filename",
         str(out_zip),
     ]
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.DEVNULL,  # remove output, do not print to console
-        stderr=subprocess.DEVNULL,  # remove error output, do not print to console
-    )
-    return result.returncode == 0  # return true if download was successful
+    return run(cmd)
 
 
-def extract_protein_faa(
-    zip_path: Path, accession: str, species_safe: str, out_dir: Path
-) -> bool:
+def extract_protein_faa(zip_path: Path, accession: str) -> Path | None:
     """
     Unzip NCBI datasets archive and extract protein.faa.
     The file is renamed to <species_safe>.faa.
@@ -98,31 +136,57 @@ def extract_protein_faa(
     workdir.mkdir(exist_ok=True)
 
     # 1. Unzip archive
-    result = subprocess.run(
-        ["unzip", "-o", str(zip_path), "-d", str(workdir)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    if not run(["unzip", "-o", str(zip_path), "-d", str(workdir)]):
+        return None
 
-    if result.returncode != 0:
-        return False
+    faa = workdir / "ncbi_dataset" / "data" / accession / "protein.faa"
+    return faa if faa.exists() else None
 
-    protein_path = workdir / "ncbi_dataset" / "data" / accession / "protein.faa"
 
-    if not protein_path.exists():
-        return False
+def protein_lengths(faa: Path) -> list[int]:
+    """Read FASTA and return protein lengths only."""
+    lengths = []
+    seq = ""
 
-    # 2. Copy and rename protein.faa
-    out_faa = out_dir / f"{species_safe}.faa"
-    with protein_path.open() as inp, out_faa.open("w") as out:
-        for line in inp:
+    with faa.open() as f:
+        for line in f:
             if line.startswith(">"):
-                gene_id = line[1:].strip().split()[0]
-                out.write(f">{species_safe}|{gene_id}\n")
+                if seq:
+                    lengths.append(len(seq))
+                seq = ""
             else:
-                out.write(line)
+                seq += line.strip()
+        if seq:
+            lengths.append(len(seq))
 
-    return True
+    return lengths
+
+
+def validate_fungal_proteome(faa: Path) -> tuple[bool, str]:
+    """
+    Fast biological QC for fungal proteomes.
+
+    Returns
+    -------
+    (accepted, reason)
+    """
+    lengths = protein_lengths(faa)
+    n = len(lengths)
+
+    if n < MIN_PROTEINS:
+        return False, f"too few proteins ({n})"
+    if n > MAX_PROTEINS:
+        return False, f"too many proteins ({n})"
+
+    mean_len = sum(lengths) / n
+    if mean_len < MIN_MEAN_LEN:
+        return False, f"mean length too small ({mean_len:.1f})"
+
+    short_frac = sum(l < MIN_PROTEIN_LEN for l in lengths) / n
+    if short_frac > MAX_SHORT_FRAC:
+        return False, f"too many short proteins ({short_frac:.1%})"
+
+    return True, "OK"
 
 
 # ~~~~~ Main logic ~~~~~
@@ -130,62 +194,73 @@ def extract_protein_faa(
 
 def main():
     args = parse_args()
-    check_dependencies()  # check if all needed programmes are available
+    check_dependencies()
 
-    INPUT = args.input
-    OUT_ZIP = args.output_zipped
-    OUT_SEQ = args.output_sequences
+    args.outdir.mkdir(parents=True, exist_ok=True)
 
-    OUT_ZIP.mkdir(parents=True, exist_ok=True)
-    OUT_SEQ.mkdir(parents=True, exist_ok=True)
+    qc_tsv = args.outdir / "qc_summary.tsv"
 
+    # ------------------------------------------------------------------
+    # Load assemblies (one species per TSV by pipeline contract)
+    # ------------------------------------------------------------------
     assemblies = defaultdict(list)
+    with args.input.open() as f:
+        next(f)
+        for line in f:
+            species, acc, rank = line.strip().split("\t")
+            assemblies[species].append((int(rank), acc))
 
-    try:
-        with INPUT.open() as fh:
-            next(fh)  # leave header
-            for line in fh:
-                species, accession, rank = line.strip().split("\t")
-                assemblies[species].append((int(rank), accession))
-
-    except Exception as e:
-        sys.exit(f"Failed to read TSV file {INPUT}: {e}")
-
-    if not assemblies:
-        sys.exit(f"No assemblies found in {INPUT}")
-
-    # one species per TSV by design
     if len(assemblies) != 1:
-        sys.exit(
-            "Input TSV contains more than one species — "
-            "this violates the pipeline contract"
-        )
+        sys.exit("Input TSV must contain exactly one species")
 
-    species, items = next(iter(assemblies.items()))
-    species_safe = safe_name(species)
+    species, ranked = next(iter(assemblies.items()))
+    species_safe = safe_species_name(species)
+    ranked.sort()
 
-    items.sort()  # rank 1 first
+    # Try assemblies in rank order
+    with qc_tsv.open("w") as qc:
+        qc.write("species\taccession\trank\tstatus\treason\n")
 
-    for rank, accession in items:
-        zip_path = OUT_ZIP / f"{species_safe}_{accession}.zip"
+        for rank, acc in ranked:
+            print(f"[{species}] trying {acc} (rank {rank})")
 
-        if not download(accession, zip_path):
-            print(
-                f"Download failed (rank {rank}) for accession {accession}",
-                file=sys.stderr,
-            )
-        if extract_protein_faa(zip_path, accession, species_safe, OUT_SEQ):
-            # SUCCESS
-            return
+            zip_path = args.outdir / f"{species_safe}_{acc}.zip"
 
-        print(
-            f"No protein.faa found (rank {rank}) for accession {accession}",
-            file=sys.stderr,
-        )
+            if not download_assembly(acc, zip_path):
+                print(f"[{species}] download failed: {acc}", file=sys.stderr)
+                qc.write(f"{species}\t{acc}\t{rank}\trejected\tdownload_failed\n")
+                continue
 
-    # if we reach h ere → all ranks failed
-    sys.exit(f"All RefSeq assemblies failed for species: {species}")
+            faa = extract_protein_faa(zip_path, acc)
+            if faa is None:
+                print(f"[{species}] protein.faa missing: {acc}", file=sys.stderr)
+                qc.write(f"{species}\t{acc}\t{rank}\trejected\tno_protein_faa\n")
+                continue
+
+            ok, reason = validate_fungal_proteome(faa)
+            if not ok:
+                print(f"[{species}] rejected {acc}: {reason}", file=sys.stderr)
+                qc.write(f"{species}\t{acc}\t{rank}\trejected\t{reason}\n")
+                continue
+
+            # ACCEPTED
+            out_faa = args.outdir / f"{species_safe}.faa"
+            with faa.open() as inp, out_faa.open("w") as out:
+                for line in inp:
+                    if line.startswith(">"):
+                        gid = line[1:].split()[0]
+                        out.write(f">{species_safe}|{gid}\n")
+                    else:
+                        out.write(line)
+
+            qc.write(f"{species}\t{acc}\t{rank}\taccepted\tOK\n")
+            print(f"[{species}] accepted {acc}")
+            return 0
+
+    # All assemblies failed
+    print(f"[{species}] all assemblies rejected", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

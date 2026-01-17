@@ -55,11 +55,20 @@ parser.add_argument(
     help="Output FASTA file",
 )
 
+parser.add_argument(
+    "--pick",
+    choices=["longest", "lexicographic", "first"],
+    required=True,
+    help="How to choose representative sequence when paralogs are present",
+)
+
+
 args = parser.parse_args()
 
 CLUSTER_ID = args.cluster_id
 ORTHOLOGS = args.orthologs
 PROTEOMES = args.proteomes
+PICK = args.pick
 OUTPUT = args.output
 
 OUTPUT.parent.mkdir(parents=True, exist_ok=True)
