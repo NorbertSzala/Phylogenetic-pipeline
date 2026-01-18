@@ -1,140 +1,162 @@
-# Projekt
+# Phylogenomic pipeline (Nextflow DSL2)
 
-Zaimplementuj i przetestuj pipeline filogenetyczny prowadzący do obliczenia zbioru drzew genów i dalej drzewa genomów, począwszy od genomów z podziałem na geny. Można zastosować własne pomysły – do uzgodnienia.
+Reproducible phylogenomic pipeline for inference of gene trees and species trees
+using orthologous and pseudo-single-copy gene families.
 
----
+## Overview
+## Requirements
+## Installation
+## Running the pipeline
+## Output structure
+## Reproducibility notes
+## Citation
 
-## Część I. Proteomy
 
-Wybrać zbiór genomów. Np.:
+``` bash
+git clone https://github.com/NorbertSzala/Phylogenetic-pipeline
 
-- min. kilkudziesięciu genomów wirusów najlepiej pokrewnych (np. koronawirusów),
-- ~30 bakterii lub archea o rozmiarze liczonym w genach do 5000,
-- min. 10 organizmów wyższych; tu można nieco ograniczyć liczbę genów,
-- zestaw genomów z różnych królestw.
 
-Pobrać z NCBI całe genomy jako listy sekwencji białkowych (proteomy).  
-Warto dobrze zastanowić się jakie genomy wybrać. W projekcie należy wykazać się znajomością własności wybranych genomów.
+```
 
----
 
-## Część II. Klastrowanie
+## Overview
 
-Dla podanych proteomów wyliczyć plik BLAST z porównaniami sekwencji genowych metodą *każdy z każdym* i poklastrować metodą MCL, MMSeqs lub alternatywną.
+This pipeline reconstructs gene trees and species trees starting from proteomes.
 
----
+Main steps:
+0. Create your species list.
+1. Download proteomes from NCBI
+2. All-vs-all sequence clustering (MMseqs2)
+3. Ortholog filtering:
+   - strict (1-to-1)
+   - relaxed (N−k, pseudo-single-copy)
+4. Multiple sequence alignment (MAFFT)
+5. Gene tree inference (IQ-TREE)
+6. Species tree inference:
+   - consensus tree (IQ-TREE)
+   - supertree / summary method (ASTRAL)
 
-## Część III. Rodziny genów (przypadek 1-1)
 
-Wybór/wygenerowanie klastrów (rodzin genów) o jednoznacznych nazwach genomów i zastąpienie nazw genów przez nazwy genomów.  
-Część klastrów jest pomijana, np. o małej liczności lub z tylko jednym genomem.
+## Requirements
 
----
+The pipeline requires the following software:
 
-## Część IV. Multiuliniowienia
+| Tool       | Purpose                               | Tested version |
+|-----------|----------------------------------------|----------------|
+| Nextflow  | Workflow manager                       | ≥ 23.10       |
+| Python    | Helper scripts                         | ≥ 3.9         |
+| MMseqs2   | Sequence clustering                    | ≥ 14.7e284    |
+| MAFFT     | Multiple sequence alignment            | ≥ 7.490       |
+| IQ-TREE   | Gene trees & consensus species tree    | ≥ 2.2.0       |
+| ASTRAL    | Species tree (summary method)          | 5.7.8         |
+| Java      | Required for ASTRAL                    | ≥ 8           |
 
-Oblicz multiuliniowenie dla każdej rodziny.
+### Software availability
 
----
+The pipeline assumes that all external tools are available in the user's `$PATH`,
+except for ASTRAL, which is provided as a local JAR file.
 
-## Część V. Drzewa rodzin
+Alternatively, absolute paths can be specified in `nextflow.config`.
 
-Obliczenie drzew rodzin z multiuliniowień metodą NJ (lub inną np. ML, MP).
 
-Użycie drzew z programu uliniawiającego jest możliwe, ale niezalecane  
-(obniżenie punktacji bazowej o 13 pkt).
+## Installation (recommended: Conda)
 
----
+Create a Conda environment with all dependencies:
 
-## Część VI. Drzewo genomów
+```bash
+conda create -n phylo \
+  nextflow python=3.10 \
+  mmseqs2 mafft iqtree openjdk \
+  -c bioconda -c conda-forge
+conda activate phylo
+```
 
-Oblicz drzewo genomów metodą konsensusową i superdrzewową.
+Install [Astral manually](https://github.com/smirarab/ASTRAL/)
+```bash
+wget https://github.com/smirarab/ASTRAL/raw/master/Astral.5.7.8.zip
+unzip Astral.5.7.8.zip
+```
 
-Dla drzew konsensowych potrzebne są klastry ortologiczne, tzn. takie które mają po dokładnie jednej sekwencji z każdego proteomu.  
-Jeśli takich klastrów nie ma albo jest ich mało, należy je wygenerować przez przetworzenie klastrów nieortologicznych (zaproponować metodę).
+To test your installation, go to the place where you put the uncompressed ASTRAL, and run:
+```bash
+ java -jar astral.5.7.8.jar -i test_data/song_primates.424.gene.tre
+```
 
----
+## Running the pipeline
 
-## Część VII. Analiza
+Basic execution:
 
-Analiza biologiczna.  
-Porównanie z istniejącymi poglądami nt. drzewa dla tego zbioru (literatura), porównać do taksonomii NCBI.  
-Napisać dokument z podsumowaniem użytych metod i wnioskami biologicznymi.
+```bash
+nextflow run main.nf
+```
 
----
+- Strict consensus species tree (1-to-1 orthologs):
 
-## Część V.a (+4 punkty) – opcjonalne
+``` bash
+nextflow run main.nf \
+  --consensus_mode strict
+```
 
-Wyeliminuj słabo wspierane drzewa z użyciem bootstrappingu.  
-Sprawdź, czy to daje lepsze wyniki niż metoda bez eliminacji.
+- Relaxed supertree using ASTRAL:
 
----
+``` bash
+nextflow run main.nf \
+  --consensus_mode relaxed
+```
 
-## Część V.b. Rodziny paralogów (+4 punkty) – opcjonalne
+- Enable bootstrap support for gene trees:
 
-Zastosuj klastry bez usuwania sekwencji, czyli dopuszczamy paralogi.  
-Oblicz superdrzewo i porównaj z wynikami dla klastrów ortologicznych.
+``` bash
+nextflow run main.nf \
+  --bootstrap true \
+  --bootstrap_reps 1000
+```
 
----
 
-## Raport
+### Expected output structure:
 
-Raport powinien mieć formę krótkiego artykułu z podziałem na:
+```bash
+tree ./
+.
+├── Astral                                  # Astral dependencies
+├── data                                    # your file with species name should be placed there
+├── results
+│   ├── alignments                          # Alignments made by MMSeqs2
+│   │   ├── relaxed
+│   │   └── strict
+│   ├── clusters                            # Clustering output. MMseqs2
+│   │   ├── fasta
+│   │   │   ├── relaxed
+│   │   │   └── strict
+│   │   └── mmseqs2
+│   ├── gene_trees                          # Partial gene_trees - one tree per protein
+│   │   ├── relaxed
+│   │   └── strict
+│   ├── mapping                             # Gene to species mapping
+│   ├── proteomes                           # Proteome sequences downloaded form NCBI. Each organism have its own folder in ./sequences
+│   │   └── sequences
+│   └── species_tree                        # final ouptut
+│       ├── astral
+│       └── consensus
+└── scripts                                 # Scripts to this pipeline
 
-- **Wstęp**
-- **Metody**
-- **Wyniki**
-- **Wnioski**
+```
 
-z bibliografią na końcu.
+## Reproducibility notes
 
-**Wstęp** powinien zawierać informację o wybranych genomach i znanych hipotezach dot. ich relacji.  
-Np. tutaj powinny być odniesienia do powiązanego artykułu z krótkim podsumowaniem, jak autorzy zrekonstruowali drzewo.
+- The pipeline is deterministic except for ML tree inference.
+- Random seeds are controlled internally by IQ-TREE when possible.
+- All parameters used for a run are stored in Nextflow logs.
+- The full pipeline can be resumed using `-resume`.
 
-**Metody** powinny opisywać zastosowany pipeline z podsumowaniem narzędzi i innych skryptów, opis zastosowanych niestandardowych rozwiązań (np. filtracji, ukorzeniania itp.) oraz opis zasobów komputerowych (jaki komputer, pamięć, czas działania).
 
-Sekcja **Wyniki** powinna zawierać końcową analizę porównawczą:  
-przedstawienie drzew wynikowych, porównanie do tych z literatury, taksonomii NCBI oraz timetree.org.
+## Citation
 
-**Wnioski** powinny podsumowywać podejście, zawierać element krytycznej analizy oraz sugerować co zrobić lepiej.
+If you use this pipeline, please cite:
 
-**Uwaga:** plik prezentacji nie jest równoważny raportowi.
-
----
-
-## Dodatkowe informacje
-
-Wyślij na Moodle wyniki całego pipeline’u, który powinien być w dużym stopniu zautomatyzowany i najlepiej zrównoleglony; można używać narzędzi do pipelinowania np. Snakemake.
-
-Wymagane:
-
-- skrypty (bash, python, R, Makefile, Snakefile, etc.),
-- raport z wynikami (format: odt, doc, pdf),
-- README – opis jak używać skrypty,
-- drzewa genów w jednym pliku (a nie w tysiącach pojedynczych) + plik/pliki z wynikowym drzewem gatunków/consensusu/etc. w formacie Newick,
-- jeśli więcej wariantów obliczeń (np. V.a, V.b) – dodać więcej plików drzew,
-- paczka na Moodle powinna mieć rozmiar do kilku megabajtów, dlatego **nie załączać**:
-  - plików fasta,
-  - proteomów,
-  - multiuliniowień,
-  - pythonowych site-packages itp.,
-  - dostępnych programów i repozytoriów,
-- w przypadku prezentacji na ostatnich zajęciach – dołączyć w dniu prezentacji (może być po).
-
----
-
-## Cennik
-
-- maksimum **40 pkt**, w tym:
-  - 27 pkt bazowe,
-  - 2 × 4 pkt bonusów (opisanych powyżej),
-  - 5 pkt – prezentacja na ostatnim wykładzie/labie,
-- wariant z prezentacją 15–25 min na ostatnich zajęciach (wymagana dla terminu 0):
-  - wysyłka wyników na Moodle maks. na dzień przed prezentacją,
-  - plik prezentacji można dosłać w dniu prezentacji,
-- wariant bez prezentacji na zajęciach:
-  - wysyłka w sesji I lub II,
-  - wymagana prezentacja osobista do końca sesji I (termin I) lub do końca sesji II (termin II) po uprzednim przesłaniu projektów i umówieniu się,
-- za brak porównania do literatury: **–3 pkt**,
-- za brak porównania do timetree.org lub taksonomii NCBI: **–2 pkt**,
-- w przypadku większej liczby zainteresowanych w sesji wyznaczony zostanie termin dodatkowy na prezentacje, ale bez bonusu 5 pkt.
+- IQtree2:
+    Bui Quang Minh, Heiko A Schmidt, Olga Chernomor, Dominik Schrempf, Michael D Woodhams, Arndt von Haeseler, Robert Lanfear, Corrigendum to: IQ-TREE 2: New Models and Efficient Methods for Phylogenetic Inference in the Genomic Era, Molecular Biology and Evolution, Volume 37, Issue 8, August 2020, Page 2461, https://doi.org/10.1093/molbev/msaa131
+- MMseqs2
+    Steinegger M, Söding J. MMseqs2 enables sensitive protein sequence searching for the analysis of massive data sets. Nat Biotechnol. 2017 Nov;35(11):1026-1028. doi: 10.1038/nbt.3988. Epub 2017 Oct 16. PMID: 29035372.
+- Astral
+    Zhang, C., Rabiee, M., Sayyari, E. et al. ASTRAL-III: polynomial time species tree reconstruction from partially resolved gene trees. BMC Bioinformatics 19 (Suppl 6), 153 (2018). https://doi.org/10.1186/s12859-018-2129-y
