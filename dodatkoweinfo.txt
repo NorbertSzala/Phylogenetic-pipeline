@@ -3,13 +3,9 @@ nie licz drzew konsensusowych z drzew bootstrapowych
 
 
 
-1. po co git commit -am ? i co oznacza flaga a?
 
 2. uruchamiam 
-python3 scripts/summarize_filtering_stats.py \
-  --results results \
-  --reference reference/reference_species_tree.tre \
-  --output results/stats/summary
+python3 scripts/summarize_filtering_stats.py   --results results   --reference data/short_taxonomy.clean.nwk   --output results/stats/summary
 
 3. Jak mam odsiać złe runy? W jakim skrypcie? a moze na oko?
 
@@ -29,27 +25,7 @@ df = df.sort_values(
 
 Poniżej odpowiedzi punkt po punkcie, krótko i konkretnie.
 
-1️⃣ Po co git commit -am i co robi -a?
-git commit -am "Finished parameter sweep runs"
 
-
--a = add all modified, already tracked files
-
-nie dodaje nowych plików, tylko te, które Git już zna
-
--m = message
-
-Po co to robisz tutaj?
-
-Bo:
-
-kończysz etap eksperymentów
-
-chcesz mieć stan pipeline’u = punkt odniesienia
-
-jeśli coś później zepsujesz → git checkout <commit>
-
-Jeśli nie używasz gita → możesz to pominąć. To tylko „bezpiecznik”.
 
 2️⃣ Uruchamiam summarize_filtering_stats.py – OK
 

@@ -2,10 +2,7 @@
 """
 Summarize filtering statistics and RF distance across pipeline runs.
 
-python3 scripts/summarize_filtering_stats.py \
-  --results results \
-  --reference reference/reference_species_tree.tre \
-  --output results/stats/summary
+python3 scripts/summarize_filtering_stats.py   --results results   --reference data/short_taxonomy.nwk   --output results/stats/summary
 
 """
 
@@ -31,9 +28,21 @@ def parse_args():
 # ---------------- RF ----------------
 
 
-def rf_distance(ref_tree: Path, query_tree: Path) -> float:
-    ref = Tree(ref_tree.read_text(), format=1)
-    qry = Tree(query_tree.read_text(), format=1)
+def rf_distance(ref_tree: Path, query_tree: Path) -> float | None:
+    """
+    Compute Robinson–Foulds distance between two trees.
+    Returns None if trees are incompatible.
+    """
+    ref = Tree(ref_tree.read_text())
+    qry = Tree(query_tree.read_text())
+
+    common = set(ref.get_leaf_names()) & set(qry.get_leaf_names())
+    if len(common) < 4:
+        return None
+
+    ref.prune(common)
+    qry.prune(common)
+
     rf, max_rf, *_ = ref.robinson_foulds(qry, unrooted_trees=True)
     return rf / max_rf if max_rf > 0 else None
 
@@ -102,21 +111,27 @@ def main():
     args = parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
 
-    df = collect_runs(args.results, args.reference)
+    # 1. zbierz WSZYSTKIE runy
+    df_all = collect_runs(args.results, args.reference)
 
-    # remove weak runs
-    df = filter_bad_runs(df, n_genomes=20)
+    # ZAPIS SUROWEJ TABELI (TEGO CI BRAKOWAŁO)
+    df_all.to_csv(args.output / "all_runs_summary.tsv", sep="\t", index=False)
 
-    # rank remaining runs
+    # 2. odfiltruj złe runy
+    df = filter_bad_runs(df_all, n_genomes=20)
+
+    # 3. posortuj najlepsze
     df = df.sort_values(
         by=["rf_consensus", "strict_kept", "mean_n_taxa"],
         ascending=[True, False, False],
     )
 
+    # 4. zapisz ranking
     df.to_csv(args.output / "ranked_runs.tsv", sep="\t", index=False)
 
-    print("Summary written")
-    print(df.head(10))
+    print("Generated:")
+    print(" - all_runs_summary.tsv")
+    print(" - ranked_runs.tsv")
 
 
 if __name__ == "__main__":

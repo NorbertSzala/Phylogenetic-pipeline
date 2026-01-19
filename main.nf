@@ -429,32 +429,50 @@ process mafft_align_relaxed {
 // }
 
 
+
 process gene_tree_ml_strict {
-    errorStrategy 'ignore'
-    maxRetries 0
+
+    tag "${cluster_id}"
 
     publishDir "${params.results}/gene_trees/strict", mode: 'copy'
+
     cpus 4
     memory '4 GB'
     time '2h'
+
+    /*
+     * KLUCZOWE:
+     * - nie zabijaj pipeline'u na pojedynczym błędzie
+     * - brak retry (błąd jest deterministyczny)
+     */
+    errorStrategy 'ignore'
+    maxRetries 0
 
     input:
         tuple val(cluster_id), path(aln)
 
     output:
+        /*
+         * emit tylko wtedy, gdy treefile faktycznie powstał
+         * (Nextflow sam odfiltruje brakujące outputy)
+         */
         tuple val(cluster_id), path("${aln.simpleName}.treefile")
 
     script:
-    def bootstrap_flag = params.bootstrap ? "-B ${params.bootstrap_reps}" : ""
+    def bootstrap_flag = params.bootstrap
+        ? "-B ${params.bootstrap_reps}"
+        : ""
 
     """
+    # --- minimalna walidacja alignmentu ---
     nseq=\$(grep -c "^>" ${aln})
 
     if [ "\$nseq" -lt 3 ]; then
-        echo "Skipping ${aln}: only \$nseq sequences" >&2
+        echo "[SKIP] ${aln} has only \$nseq sequences" >&2
         exit 0
     fi
 
+    # --- budowa drzewa ---
     iqtree2 \
         -s ${aln} \
         -m MFP \
@@ -463,36 +481,59 @@ process gene_tree_ml_strict {
         -pre tree \
         -quiet
 
+    # --- sanity check ---
+    if [ ! -f tree.treefile ]; then
+        echo "[SKIP] IQ-TREE failed for ${aln}" >&2
+        exit 0
+    fi
+
     mv tree.treefile ${aln.simpleName}.treefile
     """
 }
 
+
 process gene_tree_ml_relaxed {
-    errorStrategy 'ignore'
-    maxRetries 0
+
+    tag "${cluster_id}"
 
     publishDir "${params.results}/gene_trees/relaxed", mode: 'copy'
     cpus 4
     memory '4 GB'
     time '2h'
 
+    /*
+     * KLUCZOWE:
+     * - nie zabijaj pipeline'u na pojedynczym błędzie
+     * - brak retry (błąd jest deterministyczny)
+     */
+    errorStrategy 'ignore'
+    maxRetries 0
+
     input:
         tuple val(cluster_id), path(aln)
 
     output:
+        /*
+         * emit tylko wtedy, gdy treefile faktycznie powstał
+         * (Nextflow sam odfiltruje brakujące outputy)
+         */
         tuple val(cluster_id), path("${aln.simpleName}.treefile")
 
     script:
-    def bootstrap_flag = params.bootstrap ? "-B ${params.bootstrap_reps}" : ""
+    def bootstrap_flag = params.bootstrap
+        ? "-B ${params.bootstrap_reps}"
+        : ""
 
     """
+    # --- minimalna walidacja alignmentu ---
     nseq=\$(grep -c "^>" ${aln})
 
     if [ "\$nseq" -lt 3 ]; then
-        echo "Skipping ${aln}: only \$nseq sequences" >&2
+        echo "[SKIP] ${aln} has only \$nseq sequences" >&2
         exit 0
     fi
 
+    # --- budowa drzewa ---
     iqtree2 \
         -s ${aln} \
         -m MFP \
@@ -501,9 +542,16 @@ process gene_tree_ml_relaxed {
         -pre tree \
         -quiet
 
+    # --- sanity check ---
+    if [ ! -f tree.treefile ]; then
+        echo "[SKIP] IQ-TREE failed for ${aln}" >&2
+        exit 0
+    fi
+
     mv tree.treefile ${aln.simpleName}.treefile
     """
 }
+
 
 
 
