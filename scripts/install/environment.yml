@@ -1,0 +1,24 @@
+name: phylo_pipeline
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  # core
+  - python=3.14.2
+  - nextflow=25.10.2
+  - openjdk=21.0.9
+
+  # bio tools
+  - mmseqs2=18
+  - mafft=7.525
+  - iqtree
+  - ncbi-datasets-cli=18.13.0
+
+  
+# Python libs
+  - pandas
+  - numpy
+  - biopython
+  - pyfaidx

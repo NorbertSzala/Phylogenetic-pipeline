@@ -1,132 +1,122 @@
 #!/usr/bin/env python3
-
 """
-Summarize ortholog filtering statistics across pipeline runs.
+Summarize filtering statistics and RF distance across pipeline runs.
 
-- Reads filter.stats.tsv files
-- Aggregates strict / relaxed variants
-- Produces:
-  - summary table (CSV + TSV)
-  - bar plots for report
-
-
-Usage:
 python3 scripts/summarize_filtering_stats.py \
-  --input results/stats/filtering \
+  --results results \
+  --reference reference/reference_species_tree.tre \
   --output results/stats/summary
 
 """
 
 from pathlib import Path
 import pandas as pd
-import matplotlib.pyplot as plt
 import argparse
+from ete4 import Tree
 
 
-# --------------------------------------------------
-# CLI
-# --------------------------------------------------
+# ---------------- CLI ----------------
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Summarize filtering statistics from Nextflow pipeline"
+    p = argparse.ArgumentParser()
+    p.add_argument("--results", type=Path, required=True, help="Root results directory")
+    p.add_argument(
+        "--reference", type=Path, required=True, help="Reference species tree"
     )
-    parser.add_argument(
-        "--input",
-        type=Path,
-        default=Path("results/stats/filtering"),
-        help="Root directory with filtering stats",
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("results/stats/summary"),
-        help="Output directory for summary tables and plots",
-    )
-    return parser.parse_args()
+    p.add_argument("--output", type=Path, required=True)
+    return p.parse_args()
 
 
-# --------------------------------------------------
-# Main logic
-# --------------------------------------------------
+# ---------------- RF ----------------
 
 
-def collect_stats(root: Path) -> pd.DataFrame:
+def rf_distance(ref_tree: Path, query_tree: Path) -> float:
+    ref = Tree(ref_tree.read_text(), format=1)
+    qry = Tree(query_tree.read_text(), format=1)
+    rf, max_rf, *_ = ref.robinson_foulds(qry, unrooted_trees=True)
+    return rf / max_rf if max_rf > 0 else None
+
+
+# ---------------- Collect ----------------
+
+
+def collect_runs(results_dir: Path, ref_tree: Path):
     records = []
 
-    for stats_file in root.rglob("filter.stats.tsv"):
-        df = pd.read_csv(stats_file, sep="\t")
+    for run in results_dir.iterdir():
+        if not run.is_dir():
+            continue
 
-        # infer metadata from path
-        parts = stats_file.parts
-        mode = "strict" if "strict" in parts else "relaxed"
+        rec = {"run": run.name}
 
-        max_missing = None
-        for p in parts:
-            if p.startswith("max_missing_"):
-                max_missing = int(p.replace("max_missing_", ""))
+        # --- filtering stats ---
+        stats = run / "stats/filtering"
+        for mode in ["strict", "relaxed"]:
+            f = stats / mode / "filter.stats.tsv"
+            if not f.exists():
+                continue
 
-        df["mode"] = mode
-        df["max_missing"] = max_missing
-        df["path"] = str(stats_file)
+            df = pd.read_csv(f, sep="\t").set_index("metric")["value"]
+            rec[f"{mode}_kept"] = int(df["kept_clusters"])
+            rec[f"{mode}_input"] = int(df["input_clusters"])
+            rec[f"{mode}_retention"] = rec[f"{mode}_kept"] / rec[f"{mode}_input"]
 
-        records.append(df)
+        # --- tree stats ---
+        ts = run / "stats/tree_stats/tree_stats.tsv"
+        if ts.exists():
+            tdf = pd.read_csv(ts, sep="\t", names=["tree_id", "n_taxa"])
+            rec["mean_n_taxa"] = tdf["n_taxa"].mean()
+            rec["median_n_taxa"] = tdf["n_taxa"].median()
+            rec["n_trees"] = len(tdf)
 
-    if not records:
-        raise RuntimeError("No filter.stats.tsv files found")
+        # --- RF ---
+        cons = run / "species_tree/consensus/consensus.treefile"
+        if cons.exists():
+            rec["rf_consensus"] = rf_distance(ref_tree, cons)
 
-    return pd.concat(records, ignore_index=True)
+        astral = run / "species_tree/astral/astral.treefile"
+        if astral.exists():
+            rec["rf_astral"] = rf_distance(ref_tree, astral)
 
+        records.append(rec)
 
-# --------------------------------------------------
-# Plotting
-# --------------------------------------------------
-
-
-def plot_clusters(df: pd.DataFrame, outdir: Path):
-    plt.figure(figsize=(7, 5))
-
-    for mode in df["mode"].unique():
-        sub = df[df["mode"] == mode]
-        plt.bar(
-            sub["max_missing"].fillna(0) + (0.2 if mode == "relaxed" else -0.2),
-            sub["kept_clusters"],
-            width=0.35,
-            label=mode,
-        )
-
-    plt.xlabel("max_missing")
-    plt.ylabel("Number of clusters")
-    plt.title("Ortholog clusters retained after filtering")
-    plt.legend()
-    plt.tight_layout()
-
-    plt.savefig(outdir / "clusters_retained.png", dpi=300)
-    plt.close()
+    return pd.DataFrame(records)
 
 
-# --------------------------------------------------
-# Entry point
-# --------------------------------------------------
+def filter_bad_runs(df, n_genomes):
+    """
+    Remove biologically weak or unstable runs.
+    """
+    return df[
+        (df["strict_kept"] >= 20)
+        & (df["mean_n_taxa"] >= 0.8 * n_genomes)
+        & (df["rf_consensus"] <= 0.3)
+    ]
+
+
+# ---------------- Main ----------------
 
 
 def main():
     args = parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
 
-    df = collect_stats(args.input)
+    df = collect_runs(args.results, args.reference)
 
-    # Save tables
-    df.to_csv(args.output / "filtering_summary.tsv", sep="\t", index=False)
-    df.to_csv(args.output / "filtering_summary.csv", index=False)
+    # remove weak runs
+    df = filter_bad_runs(df, n_genomes=20)
 
-    # Plots
-    plot_clusters(df, args.output)
+    # rank remaining runs
+    df = df.sort_values(
+        by=["rf_consensus", "strict_kept", "mean_n_taxa"],
+        ascending=[True, False, False],
+    )
 
-    print("✔ Filtering statistics summarized")
-    print(f"  → {args.output / 'filtering_summary.tsv'}")
-    print(f"  → {args.output / 'clusters_retained.png'}")
+    df.to_csv(args.output / "ranked_runs.tsv", sep="\t", index=False)
+
+    print("Summary written")
+    print(df.head(10))
 
 
 if __name__ == "__main__":

@@ -68,18 +68,12 @@ def parse_args():
         help="TSV file with ranked RefSeq assemblies (one species)",
     )
     parser.add_argument("--outdir", type=Path, required=True, help="Output directory")
-    # parser.add_argument(
-    #     "--output_zipped",
-    #     type=Path,
-    #     required=True,
-    #     help="Directory for downloaded NCBI zip files",
-    # )
-    # parser.add_argument(
-    #     "--output_sequences",
-    #     type=Path,
-    #     required=True,
-    #     help="Directory for output .faa proteome",
-    # )
+    parser.add_argument("--min_proteins", type=int, default=4000)
+    parser.add_argument("--max_proteins", type=int, default=30000)
+    parser.add_argument("--min_mean_len", type=int, default=250)
+    parser.add_argument("--min_protein_len", type=int, default=30)
+    parser.add_argument("--max_short_frac", type=float, default=0.25)
+
     return parser.parse_args()
 
 

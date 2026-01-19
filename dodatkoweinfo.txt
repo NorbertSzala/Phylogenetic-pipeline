@@ -1,2 +1,192 @@
 consensus do nieukorzenionych. Slaid czy dwa do strony technicznej
 nie licz drzew konsensusowych z drzew bootstrapowych
+
+
+
+1. po co git commit -am ? i co oznacza flaga a?
+
+2. uruchamiam 
+python3 scripts/summarize_filtering_stats.py \
+  --results results \
+  --reference reference/reference_species_tree.tre \
+  --output results/stats/summary
+
+3. Jak mam odsiać złe runy? W jakim skrypcie? a moze na oko?
+
+4. Gdzie dodac ten kod
+df = df.sort_values(
+    by=["rf_consensus", "strict_kept", "mean_n_taxa"],
+    ascending=[True, False, False]
+)
+
+5. nextflow run main.nf \
+  -profile final \
+  --consensus_mode strict \
+  --max_missing 0 \
+  --min_seq_id_mmseqs 0.3 \
+  --c_mmseqs 0.8 \
+  -resume
+
+Poniżej odpowiedzi punkt po punkcie, krótko i konkretnie.
+
+1️⃣ Po co git commit -am i co robi -a?
+git commit -am "Finished parameter sweep runs"
+
+
+-a = add all modified, already tracked files
+
+nie dodaje nowych plików, tylko te, które Git już zna
+
+-m = message
+
+Po co to robisz tutaj?
+
+Bo:
+
+kończysz etap eksperymentów
+
+chcesz mieć stan pipeline’u = punkt odniesienia
+
+jeśli coś później zepsujesz → git checkout <commit>
+
+Jeśli nie używasz gita → możesz to pominąć. To tylko „bezpiecznik”.
+
+2️⃣ Uruchamiam summarize_filtering_stats.py – OK
+
+Tak. To jest właściwy moment.
+
+Po tym kroku MUSISZ mieć jeden plik typu:
+
+results/stats/summary/all_runs_summary.tsv
+
+
+Jeśli go nie ma → nie idziesz dalej.
+
+3️⃣ Jak odsiać złe runy? Gdzie i jak?
+
+Masz trzy opcje – od najlepszej.
+
+✅ OPCJA A (zalecana): w tym samym skrypcie Python
+
+Rozszerzasz summarize_filtering_stats.py.
+
+Dodajesz np.:
+
+def filter_bad_runs(df, n_genomes):
+    return df[
+        (df["strict_kept"] >= 20) &
+        (df["mean_n_taxa"] >= 0.8 * n_genomes) &
+        (df["rf_consensus"] <= 0.3)
+    ]
+
+
+I w main():
+
+df = collect_stats(...)
+df = filter_bad_runs(df, n_genomes=20)
+
+
+➡ reprodukowalne, naukowe, czyste
+
+⚠ OPCJA B: ręcznie w Excelu / LibreOffice
+
+Możesz jednorazowo, jeśli:
+
+masz mało runów (np. <20)
+
+robisz to tylko do sanity-checku
+
+ALE:
+
+nie do pracy dyplomowej
+
+nie do automatyzacji
+
+❌ OPCJA C: „na oko z drzew”
+
+Nie.
+Drzewa są walidacją końcową, nie filtrem.
+
+4️⃣ Gdzie dodać df.sort_values(...)?
+
+W TYM SAMYM skrypcie, po filtracji.
+
+Minimalny schemat w main():
+
+df = collect_stats(args.results, args.reference)
+
+df = filter_bad_runs(df, n_genomes=20)
+
+df = df.sort_values(
+    by=["rf_consensus", "strict_kept", "mean_n_taxa"],
+    ascending=[True, False, False]
+)
+
+df.to_csv(args.output / "ranked_runs.tsv", sep="\t", index=False)
+
+
+Efekt:
+
+pierwszy wiersz = najlepszy run
+
+zero ręcznego wybierania
+
+5️⃣ Finalny nextflow run ... -profile final – po co i kiedy?
+
+Ten krok robisz TYLKO RAZ, gdy:
+
+✔ masz ranking
+✔ wiesz, który zestaw parametrów jest najlepszy
+✔ chcesz wynik „produkcyjny”
+
+nextflow run main.nf \
+  -profile final \
+  --consensus_mode strict \
+  --max_missing 0 \
+  --min_seq_id_mmseqs 0.3 \
+  --c_mmseqs 0.8 \
+  -resume
+
+
+
+
+
+
+~~~~~~~~~~~~~~~~~~~~~~
+Ascomycota (14)
+Saccharomyces cerevisiae (drożdże modelowe)
+Yarrowia lipolytica (drożdże oleofilne/biotech)
+Candida albicans (patogen człowieka)
+Schizosaccharomyces pombe (model – “fission yeast”)
+Neurospora crassa (model genetyczny)
+Aspergillus nidulans (model pleśni)
+Aspergillus niger (przemysł/biotech)
+Trichoderma reesei (enzymy celulolityczne)
+Zymoseptoria tritici (patogen zbóż)
+Sclerotinia sclerotiorum (patogen roślin)
+Verticillium dahliae (patogen roślin)
+Coccidioides immitis (patogen człowieka)
+Tuber melanosporum (trufla – ektomikoryza)
+Schizosaccharomyces japonicus
+
+Basidiomycota (10)
+Ustilago maydis (patogen kukurydzy, model)
+Cryptococcus neoformans (patogen człowieka)
+Malassezia globosa (skóra, lipofilne drożdże)
+Coprinopsis cinerea (model bazydiomicetów, grzyb kapeluszowy)
+Serpula lacrymans (zgnilizna drewna w budynkach)
+Postia placenta (zgnilizna brunatna drewna)
+Amanita muscaria (ektomikoryza, klasyk)
+Rhizoctonia solani (patogen roślin)
+Puccinia graminis (rdza zbóż – bardzo klasyczny patogen)
+Wallemia ichthyophaga (ekstremofil – wysokie zasolenie)
+
+Chytridiomycota / pokrewne (3)
+Batrachochytrium dendrobatidis (chytrid – globalnie znany patogen płazów)
+Spizellomyces punctatus
+Synchytrium endobioticum (patogen ziemniaka; jeśli w TimeTree brak, podmień na Rhizoclosmatium globosum)
+
+Mucoromycota / “wczesne” linie (3
+Rhizopus delemar (często spotkasz też jako Rhizopus oryzae w bazach)
+Phycomyces blakesleeanus
+Rhizophagus irregularis (Glomeromycota, mikoryza)

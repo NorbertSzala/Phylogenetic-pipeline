@@ -24,7 +24,7 @@ if [[ -z "${SPECIES}" || -z "${OUTPUT}" ]]; then
     exit 1
 fi
 
-echo "[select_genomes] species=${SPECIES}"
+echo "species=${SPECIES}"
 
 TMP=$(mktemp)
 

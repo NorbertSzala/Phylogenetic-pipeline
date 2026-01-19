@@ -41,15 +41,22 @@ Main steps:
 
 The pipeline requires the following software:
 
-| Tool       | Purpose                               | Tested version |
-|-----------|----------------------------------------|----------------|
-| Nextflow  | Workflow manager                       | ≥ 23.10       |
-| Python    | Helper scripts                         | ≥ 3.9         |
-| MMseqs2   | Sequence clustering                    | ≥ 14.7e284    |
-| MAFFT     | Multiple sequence alignment            | ≥ 7.490       |
-| IQ-TREE   | Gene trees & consensus species tree    | ≥ 2.2.0       |
-| ASTRAL    | Species tree (summary method)          | 5.7.8         |
-| Java      | Required for ASTRAL                    | ≥ 8           |
+| Tool              | Purpose                             | Tested version       |
+| ----------------- | ----------------------------------- | -------------------- |
+| Nextflow          | Workflow manager                    | 25.10.2              |
+| Python            | Runs scripts                        | 3.14.2               |
+| ncbi-datasets-cli | Download data form NCBI             | 18.13.0              |
+| MMseqs2           | Sequence clustering                 | 18-8cc5c             |
+| MAFFT             | Multiple sequence alignment         | v7.525 (2024/Mar/13) |
+| IQ-TREE           | Gene trees & consensus species tree | 2.0.7                |
+| ASTRAL            | Species tree                        | 5.7.8                |
+| Java              | Required for ASTRAL                 | 21.0.9               |
+
+
+Software versions used in this study are recorded automatically in:
+
+results/software/software_versions.txt
+
 
 ### Software availability
 
@@ -58,28 +65,37 @@ except for ASTRAL, which is provided as a local JAR file.
 
 Alternatively, absolute paths can be specified in `nextflow.config`.
 
+## Scripts
+
+The `scripts/` directory contains helper Python and Bash scripts used internally
+by the pipeline (e.g. proteome download, ortholog filtering, FASTA extraction).
+They are executed automatically by Nextflow and are not intended to be run manually.
+
 
 ## Installation (recommended: Conda)
 
-Create a Conda environment with all dependencies:
+Create a Conda environment with all dependencies and indall ASTRAL:
 
 ```bash
-conda create -n phylo \
-  nextflow python=3.10 \
-  mmseqs2 mafft iqtree openjdk \
-  -c bioconda -c conda-forge
-conda activate phylo
+./scripts/install/install.sh
+
+conda activate phylo_pipeline
 ```
 
-Install [Astral manually](https://github.com/smirarab/ASTRAL/)
-```bash
-wget https://github.com/smirarab/ASTRAL/raw/master/Astral.5.7.8.zip
-unzip Astral.5.7.8.zip
-```
+## Input data
 
-To test your installation, go to the place where you put the uncompressed ASTRAL, and run:
+The pipeline expects a plain text file with one species name per line,
+placed in:
+
+data/short_taxonomy.csv
+
+Example:
+
 ```bash
- java -jar astral.5.7.8.jar -i test_data/song_primates.424.gene.tre
+Saccharomyces cerevisiae
+Malassezia globosa
+Serpula lacrymans
+Aspergillus niger
 ```
 
 ## Running the pipeline

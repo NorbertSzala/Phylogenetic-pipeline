@@ -4,24 +4,6 @@
 
 nextflow.enable.dsl=2
 
-params.taxonomy = "data/short_taxonomy.csv"
-params.scripts = "scripts"
-params.results = 'results'
-params.bootstrap = false
-params.bootstrap_reps = 1000
-params.min_support = 70
-params.max_bad_frac = 0.3
-params.min_seq_id_mmseqs = 0.3
-params.c_mmseqs = 0.8
-params.cov_mode_mmseqs = 1
-params.max_clusters = 50
-params.max_missing = 1
-params.n_genomes = 4 // edytuj potem przy pelnym projekcie
-params.astral_jar = "tools/astral.jar"
-params.min_strict_clusters_for_consensus = 30
-params.pick_representative = "longest"  // jak rozwiązywać paralogi
-params.consensus_mode = "strict"   // strict | relaxed
-
 workflow {
     // 1. input taxonomy file
     // taxonomy_ch = channel.fromPath(params.taxonomy)
@@ -160,9 +142,12 @@ workflow orthology_pipeline {
         /*
          * Filter orthologs with given missing-data tolerance
          */
-        orthologs_ch = label == "strict"
+        filt = label == "strict"
             ? filter_orthologs_strict(clusters_ch)
             : filter_orthologs_relaxed(clusters_ch)
+
+        orthologs_ch = filt.orthologs
+        stats_ch     = filt.stats
 
 
 
@@ -445,6 +430,9 @@ process mafft_align_relaxed {
 
 
 process gene_tree_ml_strict {
+    errorStrategy 'ignore'
+    maxRetries 0
+
     publishDir "${params.results}/gene_trees/strict", mode: 'copy'
     cpus 4
     memory '4 GB'
@@ -460,6 +448,13 @@ process gene_tree_ml_strict {
     def bootstrap_flag = params.bootstrap ? "-B ${params.bootstrap_reps}" : ""
 
     """
+    nseq=\$(grep -c "^>" ${aln})
+
+    if [ "\$nseq" -lt 3 ]; then
+        echo "Skipping ${aln}: only \$nseq sequences" >&2
+        exit 0
+    fi
+
     iqtree2 \
         -s ${aln} \
         -m MFP \
@@ -473,6 +468,9 @@ process gene_tree_ml_strict {
 }
 
 process gene_tree_ml_relaxed {
+    errorStrategy 'ignore'
+    maxRetries 0
+
     publishDir "${params.results}/gene_trees/relaxed", mode: 'copy'
     cpus 4
     memory '4 GB'
@@ -488,6 +486,13 @@ process gene_tree_ml_relaxed {
     def bootstrap_flag = params.bootstrap ? "-B ${params.bootstrap_reps}" : ""
 
     """
+    nseq=\$(grep -c "^>" ${aln})
+
+    if [ "\$nseq" -lt 3 ]; then
+        echo "Skipping ${aln}: only \$nseq sequences" >&2
+        exit 0
+    fi
+
     iqtree2 \
         -s ${aln} \
         -m MFP \
@@ -508,9 +513,10 @@ process filter_orthologs_strict {
 
     input:
         path clusters
+
     output:
-        path "orthologs.tsv"
-        path "filter.stats.tsv"
+        path "orthologs.tsv", emit: orthologs
+        path "filter.stats.tsv", emit: stats
 
     script:
     """
@@ -522,14 +528,17 @@ process filter_orthologs_strict {
     """
 }
 
+
+
 process filter_orthologs_relaxed {
     publishDir "${params.results}/stats/filtering/relaxed", mode:'copy'
-    
+
     input:
         path clusters
+
     output:
-        path "orthologs.tsv"
-        path "filter.stats.tsv"
+        path "orthologs.tsv", emit: orthologs
+        path "filter.stats.tsv", emit: stats
 
     script:
     """
@@ -537,9 +546,10 @@ process filter_orthologs_relaxed {
         --input ${clusters} \
         --n_genomes ${params.n_genomes} \
         --max_missing ${params.max_missing} \
-        --output orthologs.tsv
+        --output orthologs.tsv \
     """
 }
+
 
 process tree_stats {
 
@@ -556,8 +566,8 @@ process tree_stats {
     awk '
     {
       gsub(/[();]/,"");
-      n=split($0,a,",");
-      print NR "\\t" n
+      n=split(\$0,a,",");
+      print NR "\t" n
     }' ${gene_trees} > tree_stats.tsv
     """
 }
