@@ -14,8 +14,6 @@ using orthologous and pseudo-single-copy gene families.
 
 ``` bash
 git clone https://github.com/NorbertSzala/Phylogenetic-pipeline
-
-
 ```
 
 
