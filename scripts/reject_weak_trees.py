@@ -57,9 +57,6 @@ MIN_SUPPORT = float(args.min_support)
 MAX_BAD_FRAC = float(args.max_bad_frac)
 
 OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-LOG = OUTPUT.parent / "rejecting_trees_failures.log"
-LOG.write_text("")  # clear log file
-
 
 # ~~~~~ Functions ~~~~~
 

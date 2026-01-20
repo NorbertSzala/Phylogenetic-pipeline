@@ -36,7 +36,7 @@ def rf_distance(ref_tree: Path, query_tree: Path) -> float | None:
     ref = Tree(ref_tree.read_text())
     qry = Tree(query_tree.read_text())
 
-    common = set(ref.get_leaf_names()) & set(qry.get_leaf_names())
+    common = set(ref.leaf_names()) & set(qry.leaf_names())
     if len(common) < 4:
         return None
 

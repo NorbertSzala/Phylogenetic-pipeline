@@ -174,3 +174,113 @@ If you use this pipeline, please cite:
     Steinegger M, Söding J. MMseqs2 enables sensitive protein sequence searching for the analysis of massive data sets. Nat Biotechnol. 2017 Nov;35(11):1026-1028. doi: 10.1038/nbt.3988. Epub 2017 Oct 16. PMID: 29035372.
 - Astral
     Zhang, C., Rabiee, M., Sayyari, E. et al. ASTRAL-III: polynomial time species tree reconstruction from partially resolved gene trees. BMC Bioinformatics 19 (Suppl 6), 153 (2018). https://doi.org/10.1186/s12859-018-2129-y
+
+
+
+
+
+
+
+
+
+
+
+
+
+``` mermaid
+
+flowchart TD
+
+%% ===============================
+%% INPUT
+%% ===============================
+A["Input: lista gatunków<br/>(taxonomy.csv)"]
+A --> B["select_genomes.sh<br/>NCBI datasets summary"]
+
+%% ===============================
+%% METADATA
+%% ===============================
+B -->|*_summary.json| C["select_best_assemblies.py<br/>filtr RefSeq (GCF)"]
+
+C -->|ranked assemblies.tsv| D{Czy istnieje RefSeq?}
+D -- NIE --> D1["Pominięcie dalszych analiz"]
+D -- TAK --> E["download_genomes.py"]
+
+%% ===============================
+%% DOWNLOAD + QC
+%% ===============================
+E -->|ncbi-datasets-cli download| F["protein.faa<br/>(pojedynczy gatunek)"]
+
+F --> G{QC proteomu}
+G -- FAIL --> G1["Odrzucenie assembly<br/>próba kolejnego"]
+G -- OK --> H["Zapis &lt;species&gt;.faa<br/>QC_summary.tsv"]
+
+%% ===============================
+%% PREPARE ALL PROTEOMES
+%% ===============================
+H --> I["Scalanie proteomów<br/>all_proteomes.faa"]
+
+I --> J["create_mapping_gene_to_specie.py<br/>mapowanie gene → species"]
+
+%% ===============================
+%% CLUSTERING
+%% ===============================
+I --> K["MMseqs2<br/>all-vs-all similarity"]
+K --> L["MMseqs2 clustering<br/>clusters_cluster.tsv"]
+
+%% ===============================
+%% ORTHOLOGY FILTERING
+%% ===============================
+L --> M["filter_cluster.py"]
+M -->|orthologs_relaxed.tsv| N{Tryb ortologii}
+
+N -- strict<br/>(max_missing=0) --> N1["Ścisłe 1:1 ortologi"]
+N -- relaxed<br/>(max_missing&gt;0) --> N2["Pseudo-single-copy"]
+
+%% ===============================
+%% FASTA PER CLUSTER
+%% ===============================
+N1 --> O["create_fasta_from_clusters.py"]
+N2 --> O
+
+O -->|cluster_X.faa| P{≥ 2 sekwencje?}
+P -- NIE --> P1["Pomijanie klastra"]
+P -- TAK --> Q["MAFFT<br/>Multiple Sequence Alignment"]
+
+%% ===============================
+%% GENE TREES
+%% ===============================
+Q -->|alignment.aln| R["IQ-TREE<br/>ML gene tree"]
+
+R --> S{Bootstrap włączony?}
+S -- NIE --> T["treefile"]
+S -- TAK --> T1["treefile + supports"]
+
+%% ===============================
+%% TREE QUALITY FILTER
+%% ===============================
+T1 --> U["reject_weak_trees.py"]
+U -->|zaakceptowane drzewa| T
+U -->|odrzucone drzewa| U1["Log odrzuceń"]
+
+%% ===============================
+%% SPECIES TREE – SUMMARY
+%% ===============================
+T --> V["ASTRAL<br/>summary species tree"]
+
+%% ===============================
+%% SPECIES TREE – CONSENSUS
+%% ===============================
+Q --> W["concatenate_alignments.py<br/>supermatrix"]
+W --> X["IQ-TREE<br/>consensus species tree"]
+
+%% ===============================
+%% OUTPUT
+%% ===============================
+V --> Y["Final species tree<br/>(summary)"]
+X --> Z["Final species tree<br/>(consensus)"]
+
+Y --> RSLT["Wyniki końcowe<br/>porównanie drzew"]
+Z --> RSLT
+
+```
