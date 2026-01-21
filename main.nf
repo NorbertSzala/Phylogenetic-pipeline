@@ -37,15 +37,26 @@ workflow {
             input : tuple(species, assemblies.tsv)
             output: tuple(species, proteome.faa, qc.tsv)
      */
-    proteomes_ch = assemblies_ch | download_genomes
-    
+    download_genomes(assemblies_ch)
+
+    proteomes_ch = download_genomes.out.faa   // (species, faa)
+    qc_ch        = download_genomes.out.qc    // (species, qc)
+
+    proteomes_with_qc_ch =
+        proteomes_ch
+            .map { species, faa -> tuple(species, faa) }
+            .join(
+                qc_ch.map { species, qc -> tuple(species, qc) }
+            )
+
     /*
     5. Create gene to spciecies mapping
         input:      tuple(species, proteome.faa, qc.tsv)
         output:     gene_to_species.tsv
     */
-    gene_maps_ch = create_mapping(proteomes_ch)
+    proteomes_with_qc_ch.view { "DEBUG: $it" }
 
+    gene_maps_ch = create_mapping(proteomes_with_qc_ch)
     //merge all outputs to single file
     gene_maps_file_ch = gene_maps_ch
         .collectFile(
@@ -62,9 +73,9 @@ workflow {
         output: tuple(clusters_cluster.tsv, clusters_rep_seq.fasta)
     */
     merged_faa_ch = proteomes_ch
-        .map { species, proteome, qc -> proteome }
-        .collectFile(name: 'all_proteomes.faa',
-            sort: true)
+        .map { species, proteome -> proteome }
+        .collectFile(name: 'all_proteomes.faa', sort: true)
+
 
     clusters_ch = run_mmseqs(merged_faa_ch)
 
@@ -205,6 +216,7 @@ workflow orthology_pipeline {
 
 
 process select_genomes {
+    publishDir "results/selected_genomes"
 
     tag "${species}"
 
@@ -226,7 +238,7 @@ process select_genomes {
 
 
 process select_best_assemblies {
-
+    publishDir "results/selected_assemblies"
     tag "${species}"
 
     input:
@@ -245,25 +257,25 @@ process select_best_assemblies {
 
 
 process download_genomes {
-    tag "${species}"
-    publishDir { "${params.results}/proteomes/sequences/${species.replaceAll(' ','_')}" }, mode: 'copy'
-
 
     input:
         tuple val(species), path(assemblies_tsv)
-        
+
     output:
-    tuple val(species), path("*.faa"), path("qc_summary.tsv")
+        tuple val(species), path("qc_summary.tsv"), emit: qc
+        tuple val(species), path("*.faa"), emit: faa
 
     script:
-        """
-        python3 ${projectDir}/scripts/download_genomes.py \
+    """
+    python3 ${projectDir}/scripts/download_genomes.py \
         --input ${assemblies_tsv} \
         --outdir .
-        """
+    """
 }
 
+
 process create_mapping {
+    publishDir "results/created_mapping"
     tag "${species}"
 
     input:
@@ -283,7 +295,6 @@ process create_mapping {
 
 
 process run_mmseqs {
-
     publishDir "${params.results}/clusters/mmseqs2", mode: 'copy'
 
     input:

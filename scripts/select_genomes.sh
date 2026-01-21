@@ -16,40 +16,53 @@ set -euo pipefail
 #   select_genomes.sh "<species_name>" <output_json>
 # -----------------------------------------------------------------------------
 
-SPECIES="$1"
-OUTPUT="$2"
+echo "#1. Selecting genomes from NCBI based on species names..."
 
+# Safety settings - stop script on errors, undefined variables, or failed pipes
+set -euo pipefail
 
-if [[ -z "${SPECIES}" || -z "${OUTPUT}" ]]; then
-    echo "Usage: select_genomes.sh <species_name> <output_json>" >&2
+INPUT=$1
+OUTPUT=$2
+
+if [[ -z "${INPUT}" || -z "${OUTPUT}" ]]; then
+    echo "Usage: select_genomes.sh <species_name> <output_json>"
     exit 1
 fi
 
-echo "species=${SPECIES}"
+# CREATE temp file
+TMP=$(mktemp)
 
-# Cache
-if [[ -s "${OUTPUT}" ]]; then
-    echo "[select_genomes] cached: ${OUTPUT}"
-    exit 0
+# Set logging
+LOG="selecting_assemblies.log"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG}"
+}
+
+err() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" | tee -a "${LOG}" >&2
+}
+
+
+log "Starting genome selection"
+log "Species: ${INPUT}"
+log "Output: ${OUTPUT}"
+
+
+if datasets summary genome taxon "$INPUT" > "${TMP}"; then
+    # save only when JSON is not empty
+    if [[ -s "${TMP}" ]]; then
+        mv "${TMP}" "${OUTPUT}"
+        log "Summary saved to ${OUTPUT}"
+
+    else
+        err "Empty result returned for species: ${INPUT}"
+
+        rm -f "${TMP}"
+        exit 2
+    fi
+else
+    err "datasets command failed for species: ${INPUT}"
+    rm -f "${TMP}"
+    exit 3
 fi
-
-if ! datasets summary genome taxon "${SPECIES}" \
-    --assembly-level complete \
-    --reference \
-    --limit 1 \
-    > "${OUTPUT}"; then
-    echo "[select_genomes] datasets failed for ${SPECIES}, creating placeholder" >&2
-    : > "${OUTPUT}"        # <<< kluczowe dla Nextflow
-    exit 0
-fi
-
-if [[ ! -s "${OUTPUT}" ]]; then
-    echo "[select_genomes] empty result for ${SPECIES}, keeping placeholder" >&2
-    : > "${OUTPUT}"
-    exit 0
-fi
-
-echo "[select_genomes] summary written to ${OUTPUT}"
-
-
-

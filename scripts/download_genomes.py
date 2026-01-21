@@ -205,7 +205,8 @@ def main():
             assemblies[species].append((int(rank), acc))
 
     if len(assemblies) != 1:
-        sys.exit("Input TSV must contain exactly one species")
+        print("No valid assemblies for this species — skipping", file=sys.stderr)
+        return 0
 
     species, ranked = next(iter(assemblies.items()))
     species_safe = safe_species_name(species)
@@ -253,7 +254,7 @@ def main():
 
     # All assemblies failed
     print(f"[{species}] all assemblies rejected", file=sys.stderr)
-    return 1
+    return 0
 
 
 if __name__ == "__main__":
