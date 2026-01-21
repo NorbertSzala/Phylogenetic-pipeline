@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 """
 Script to generate filtered gene families from MMseqs2 clustering output.
 
@@ -40,12 +39,6 @@ def parse_args():
         type=int,
         required=True,
         help="Number of genomes/proteomes in the analysis",
-    )
-    parser.add_argument(
-        "--max_missing",
-        type=int,
-        default=1,
-        help="How many genomes may be missing in a cluster (N - max_missing)",
     )
 
     parser.add_argument("--output", required=True, type=Path)
@@ -89,16 +82,13 @@ def main():
 
         for rep_id, members in clusters.items():
             by_species = defaultdict(list)
+            # reject clusters smaller than n_genomes - every cluster should have exactly one gene from each genome
+            if len(members) < args.n_genomes:
+                rejected_too_small += 1
+                continue
 
             for gene in members:
                 by_species[species_from_id(gene)].append(gene)
-
-            n_species = len(by_species)
-
-            # za mało genomów
-            if n_species < args.n_genomes - args.max_missing:
-                rejected_too_small += 1
-                continue
 
             selected = []
             paralog = False
@@ -109,7 +99,7 @@ def main():
                 selected.append(sorted(genes)[0])
 
             # STRICT: paralogi niedozwolone
-            if args.max_missing == 0 and paralog:
+            if paralog:
                 rejected_paralogs += 1
                 continue
 
@@ -126,7 +116,6 @@ def main():
         stats.write(f"kept_clusters\t{kept_clusters}\n")
         stats.write(f"rejected_too_small\t{rejected_too_small}\n")
         stats.write(f"rejected_paralogs\t{rejected_paralogs}\n")
-        stats.write(f"max_missing\t{args.max_missing}\n")
         stats.write(f"n_genomes\t{args.n_genomes}\n")
 
 

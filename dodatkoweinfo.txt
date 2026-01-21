@@ -1,168 +1,404 @@
-consensus do nieukorzenionych. Slaid czy dwa do strony technicznej
-nie licz drzew konsensusowych z drzew bootstrapowych
+Poniżej masz **rozbudowaną wersję prezentacji na ~15 minut spokojnego mówienia**, **10–12 slajdów**, w pełni opartą na **Twoim raporcie i parametrach pipeline’u**.
+Forma: **tytuł slajdu + punkty**, bez wyników i wniosków.
+Styl: akademicki, ale „do mówienia”, nie do czytania z kartki.
+
+---
+
+## **Slajd 1 — Temat i cel projektu**
+
+**Temat**
+
+* Filogenomika grzybów na podstawie danych genomowych
+* Automatyczna rekonstrukcja drzew genów i drzewa gatunków
+
+**Cel**
+
+* zaprojektowanie i implementacja własnego pipeline’u filogenomicznego
+* rekonstrukcja drzewa gatunków dla zróżnicowanego zestawu grzybów
+* porównanie podejścia konkatenacyjnego i koalescencyjnego
+
+**Zakres**
+
+* analiza genomowa, bez interpretacji wyników biologicznych
+
+---
+
+## **Slajd 2 — Motywacja biologiczna**
+
+**Królestwo Fungi**
+
+* duża różnorodność morfologiczna i ekologiczna
+* liczne głębokie rozgałęzienia ewolucyjne
+* częste konflikty pomiędzy drzewami genów
+
+**Problemy filogenetyczne**
+
+* duplikacje genomów
+* utraty genów
+* paralogia
+* niepełne sortowanie linii rodowych (ILS)
+
+**Dlaczego filogenomika**
+
+* pojedyncze geny często dają sprzeczne topologie
+* analiza setek genów zwiększa stabilność rekonstrukcji
+
+---
+
+## **Slajd 3 — Zestaw badanych organizmów**
+
+**Charakterystyka zbioru**
+
+* 26 gatunków grzybów
+* pełne genomy (RefSeq, GCF)
+* ręczny dobór taksonów
+
+**Zakres ekologiczny**
+
+* drożdże jednokomórkowe
+* grzyby strzępkowe saprotroficzne
+* patogeny roślin i zwierząt
+* symbionty mykoryzowe
+* ekstremofile
+
+**Cel doboru**
+
+* maksymalne zróżnicowanie biologiczne
+* testowanie odporności pipeline’u na konflikty filogenetyczne
+
+---
+
+## **Slajd 4 — Dikarya: Ascomycota**
+
+**Przedstawiciele**
+
+* *Saccharomyces cerevisiae*
+* *Neurospora crassa*
+* *Aspergillus nidulans*
+* *Aspergillus niger*
+* *Candida albicans*
+* *Schizosaccharomyces pombe*, *S. japonicus*
+
+**Znaczenie**
+
+* klasyczne organizmy modelowe
+* bardzo dobra jakość złożeń genomów
+* punkt odniesienia dla poprawności rekonstrukcji
+
+**Rola w analizie**
+
+* stabilny sygnał filogenetyczny
+* kontrola jakości pipeline’u
+
+---
+
+## **Slajd 5 — Dikarya: Basidiomycota**
+
+**Przedstawiciele**
+
+* *Cryptococcus neoformans* — saprotrof / patogen oportunistyczny
+* *Serpula lacrymans* — brunatny rozkład drewna
+* *Puccinia graminis* — patogen roślin
+* *Coprinopsis cinerea*
+* *Malassezia globosa*
+* *Wallemia ichthyophaga* — ekstremofil
+
+**Znaczenie biologiczne**
+
+* zróżnicowane enzymy rozkładu
+* adaptacje do środowisk skrajnych
+* odmienne strategie życiowe
+
+---
+
+## **Slajd 6 — Nondikarya (Early Diverging Fungi)**
+
+**Mucoromycota**
+
+* *Rhizopus delemar*
+
+  * wczesna duplikacja genomu
+  * ~20% elementów transpozycyjnych
+  * ekspansja genów zjadliwości
+* *Phycomyces blakesleeanus*
+
+  * fototropizm
+  * geny White Collar (fotoreceptory)
+
+**Glomeromycota**
+
+* *Rhizophagus irregularis*
+
+  * symbioza mykoryzowa
+  * obecność konserwowanych genów mejotycznych
+
+**Chytridiomycota**
+
+* *Batrachochytrium dendrobatidis* — pasożyt płazów
+* *Spizellomyces punctatus*
+
+  * receptory fitohormonów
+  * edycja mitochondrialnych tRNA
+
+**Znaczenie**
+
+* linie problematyczne filogenetycznie
+* główne źródło konfliktów drzew genów
+
+---
+
+## **Slajd 7 — Ogólna architektura pipeline’u**
+
+**Silnik workflow**
+
+* Nextflow (DSL2)
+* pipeline modułowy i odtwarzalny
+* łatwe zarządzanie zależnościami (Conda)
+
+**Środowisko**
+
+* Conda environment: `project_gp`
+* maksymalnie 8 rdzeni (`max_cpus = 8`)
+
+**Struktura**
+
+1. pobranie i selekcja genomów
+2. klastrowanie homologów
+3. selekcja ortologów
+4. MSA
+5. drzewa genów
+6. drzewo gatunków
+
+---
+
+## **Slajd 8 — Dane wejściowe i selekcja genomów**
+
+**Źródło**
+
+* NCBI RefSeq
+* metadane genomowe
+
+**Filtracja**
+
+* tylko złożenia typu `GCF`
+* hierarchia jakości:
+
+  * chromosome
+  * scaffold
+  * contig
+
+**Założenie**
+
+* minimalizacja błędów wynikających z niekompletnych genomów
+* świadome odrzucanie słabych złożeń
+
+---
+
+## **Slajd 9 — Klastrowanie homologów (MMseqs2)**
+
+**Narzędzie**
+
+* MMseqs2 (all-vs-all)
+
+**Parametry**
+
+* minimalna identyczność sekwencji: `0.4`
+* pokrycie sekwencji: `0.7`
+* `cov_mode = 1` (asymetryczne)
+
+**Zasoby**
+
+* 4 CPU
+* 8 GB RAM
+
+**Cel**
+
+* identyfikacja rodzin homologicznych
+* ograniczenie przypadkowych dopasowań domen
+
+---
+
+## **Slajd 10 — Selekcja ortologów i filtracja**
+
+**Tryby**
+
+* `strict`
+
+  * dokładnie jeden gen na genom
+  * brak paralogów
+* `relaxed`
+
+  * `max_missing = 1`
+  * tolerancja utrat genów
+
+**Dodatkowe parametry**
+
+* `max_clusters = 10000`
+* wybór reprezentanta: `longest`
+* minimalna liczba klastrów do konsensusu: `30`
+
+**Znaczenie**
+
+* kontrola wpływu duplikacji
+* redukcja szumu filogenetycznego
+
+---
+
+## **Slajd 11 — MSA i drzewa genów**
+
+**Wielokrotne dopasowanie**
+
+* MAFFT
+* parametry domyślne
+* brak automatycznego trimowania
+
+**Drzewa genów**
+
+* IQ-TREE
+* automatyczny dobór modelu (`MFP`)
+* bootstrap: `1000` (opcjonalnie)
+
+**Filtracja drzew**
+
+* `min_support = 70`
+* maks. 30% słabych węzłów (`max_bad_frac = 0.3`)
+
+---
+
+## **Slajd 12 — Rekonstrukcja drzewa gatunków**
+
+**Dwa podejścia**
+
+* supermacierz (konkatenacja, ML)
+* supertree (ASTRAL, MSC)
+
+**Założenia**
+
+* brak wspólnej historii wszystkich genów
+* uwzględnienie konfliktów drzew genów
+
+**Techniczne szczegóły**
+
+* drzewa nieukorzenione
+* ukorzenianie na etapie analizy
+* ASTRAL uruchamiany z pliku JAR
+
+---
+
+### Jeśli chcesz dalej:
+
+* mogę rozpisać **dokładny timing (ile minut na slajd)**,
+* albo przygotować **wersję „co powiedzieć” punkt po punkcie**,
+* albo przerobić to bezpośrednio na **Beamera / PPTX** pod oddanie.
 
 
 
 
-2. uruchamiam 
-python3 scripts/summarize_filtering_stats.py   --results results   --reference data/short_taxonomy.clean.nwk   --output results/stats/summary
 
-3. Jak mam odsiać złe runy? W jakim skrypcie? a moze na oko?
+Poniżej masz **bardzo rozszerzoną wersję prezentacji w formie NOTATEK DO MÓWIENIA**, **ponumerowaną według slajdów (1–12)**.
+To **nie są slajdy**, tylko **tekst, który możesz mieć przed sobą** podczas prezentacji ~15 minut.
+Styl: ciągły, spokojny, akademicki — dokładnie pod to, co już masz w raporcie i pipeline.
 
-4. Gdzie dodac ten kod
-df = df.sort_values(
-    by=["rf_consensus", "strict_kept", "mean_n_taxa"],
-    ascending=[True, False, False]
-)
+---
 
-5. nextflow run main.nf \
-  -profile final \
-  --consensus_mode strict \
-  --max_missing 0 \
-  --min_seq_id_mmseqs 0.3 \
-  --c_mmseqs 0.8 \
-  -resume
+## **1. Cel projektu i ogólny kontekst**
 
-Poniżej odpowiedzi punkt po punkcie, krótko i konkretnie.
+Celem projektu było zaprojektowanie i uruchomienie zautomatyzowanego pipeline’u filogenomicznego, który pozwala na rekonstrukcję drzew genów, a następnie drzewa gatunków na podstawie pełnych danych genomowych. Projekt miał charakter zarówno biologiczny, jak i techniczny — z jednej strony analizowane były relacje ewolucyjne pomiędzy grzybami, z drugiej strony kluczowym elementem było przygotowanie odtwarzalnego i elastycznego workflow.
 
+Pipeline został zaprojektowany tak, aby umożliwiać testowanie różnych strategii rekonstrukcji filogenetycznej, w szczególności podejścia konkatenacyjnego oraz koalescencyjnego. W ramach projektu nie skupiano się na szczegółowej interpretacji biologicznej wyników, lecz na samym procesie rekonstrukcji oraz wpływie zastosowanych metod i filtrów na końcową topologię drzewa.
 
+---
 
-2️⃣ Uruchamiam summarize_filtering_stats.py – OK
+## **2. Motywacja biologiczna**
 
-Tak. To jest właściwy moment.
+Królestwo Fungi charakteryzuje się wyjątkowo dużą różnorodnością biologiczną i ewolucyjną. Obejmuje ono zarówno organizmy jednokomórkowe, jak i wielokomórkowe, o bardzo różnych strategiach życiowych, takich jak saprotrofia, pasożytnictwo czy symbioza. Z tego powodu rekonstrukcja drzewa filogenetycznego grzybów stanowi duże wyzwanie metodologiczne.
 
-Po tym kroku MUSISZ mieć jeden plik typu:
+W przypadku grzybów często obserwuje się konflikty pomiędzy drzewami genów, wynikające z duplikacji genomów, utrat genów, paralogii oraz niepełnego sortowania linii rodowych. Zastosowanie filogenomiki, czyli analizy setek genów jednocześnie, pozwala w większym stopniu uśrednić ten sygnał i uzyskać stabilniejsze oszacowanie relacji ewolucyjnych.
 
-results/stats/summary/all_runs_summary.tsv
+---
 
+## **3. Dobór zestawu badanych organizmów**
 
-Jeśli go nie ma → nie idziesz dalej.
+Do analizy wybrano 26 gatunków grzybów. Dobór ten był przeprowadzony ręcznie i celowo, aby w zestawie znalazły się organizmy reprezentujące główne linie ewolucyjne królestwa Fungi oraz różnorodne nisze ekologiczne. W szczególności uwzględniono zarówno przedstawicieli Dikarya, jak i linii wcześnie rozgałęziających się, określanych jako Early Diverging Fungi.
 
-3️⃣ Jak odsiać złe runy? Gdzie i jak?
+Zestaw obejmuje drożdże jednokomórkowe, grzyby strzępkowe saprotroficzne, patogeny roślin i zwierząt, symbionty mykoryzowe oraz ekstremofile. Taki dobór pozwalał sprawdzić, jak pipeline radzi sobie z genomami o bardzo różnej strukturze, historii ewolucyjnej i stopniu skomplikowania.
 
-Masz trzy opcje – od najlepszej.
+---
 
-✅ OPCJA A (zalecana): w tym samym skrypcie Python
+## **4. Dikarya – Ascomycota**
 
-Rozszerzasz summarize_filtering_stats.py.
+W obrębie Dikarya znaczną część zestawu stanowią przedstawiciele Ascomycota, w tym klasyczne organizmy modelowe, takie jak *Saccharomyces cerevisiae* oraz *Neurospora crassa*. Gatunki te są bardzo dobrze poznane, a ich genomy cechują się wysoką jakością złożeń i adnotacji, co czyni je dobrym punktem odniesienia dla testowania poprawności pipeline’u.
 
-Dodajesz np.:
+W analizie znalazły się również inne ascomycety, takie jak *Candida albicans*, *Aspergillus nidulans* czy *Aspergillus niger*, reprezentujące zarówno drożdże, jak i grzyby strzępkowe. Ich obecność zwiększa różnorodność biologiczną zbioru i umożliwia ocenę stabilności rekonstrukcji wewnątrz dobrze ugruntowanego kladu.
 
-def filter_bad_runs(df, n_genomes):
-    return df[
-        (df["strict_kept"] >= 20) &
-        (df["mean_n_taxa"] >= 0.8 * n_genomes) &
-        (df["rf_consensus"] <= 0.3)
-    ]
+---
 
+## **5. Dikarya – Basidiomycota**
 
-I w main():
+Wśród Basidiomycota uwzględniono gatunki o bardzo różnych strategiach życiowych. *Cryptococcus neoformans* jest przykładem saprotrofa i patogena oportunistycznego, zdolnego do przetrwania w organizmie gospodarza. *Serpula lacrymans* przeprowadza brunatny rozkład drewna, trawiąc celulozę i powodując degradację struktur budowlanych.
 
-df = collect_stats(...)
-df = filter_bad_runs(df, n_genomes=20)
+Z kolei *Puccinia graminis* jest wyspecjalizowanym patogenem roślin uprawnych, natomiast *Wallemia ichthyophaga* reprezentuje ekstremofile zdolne do życia w środowiskach o bardzo wysokim zasoleniu. Tak duża rozpiętość ekologiczna w obrębie jednego kladu stanowi dobry test dla metod filogenomicznych.
 
+---
 
-➡ reprodukowalne, naukowe, czyste
+## **6. Nondikarya – linie wcześnie rozgałęziające się**
 
-⚠ OPCJA B: ręcznie w Excelu / LibreOffice
+W projekcie uwzględniono również przedstawicieli linii wcześnie rozgałęziających się, które często sprawiają największe problemy filogenetyczne. *Rhizopus delemar* z Mucoromycota charakteryzuje się genomem bogatym w duplikacje i elementy transpozycyjne, co utrudnia jednoznaczną identyfikację ortologów.
 
-Możesz jednorazowo, jeśli:
+*Phycomyces blakesleeanus* jest klasycznym organizmem modelowym badań nad fototropizmem i reakcjami na bodźce środowiskowe, kontrolowanymi przez geny typu White Collar. *Rhizophagus irregularis* z Glomeromycota jest symbiontem roślin i posiada geny związane z mejozą, co podważa wcześniejsze założenia o jego klonalnym rozmnażaniu. Wśród Chytridiomycota uwzględniono zarówno patogena (*Batrachochytrium dendrobatidis*), jak i glebowego saprotrofa (*Spizellomyces punctatus*), zachowującego wiele cech ancestralnych.
 
-masz mało runów (np. <20)
+---
 
-robisz to tylko do sanity-checku
+## **7. Architektura pipeline’u filogenomicznego**
 
-ALE:
+Wszystkie analizy przeprowadzono z wykorzystaniem środowiska Nextflow w standardzie DSL2. Pipeline został zaprojektowany w sposób modularny, tak aby każdy etap analizy był realizowany jako osobny proces z jasno zdefiniowanymi wejściami i wyjściami. Umożliwia to łatwą modyfikację parametrów oraz testowanie alternatywnych strategii analizy.
 
-nie do pracy dyplomowej
+Do zarządzania zależnościami wykorzystano środowisko Conda (`project_gp`). Pipeline był uruchamiany lokalnie, z maksymalnym wykorzystaniem 8 rdzeni CPU, przy czym poszczególne procesy miały przypisane konkretne limity zasobów.
 
-nie do automatyzacji
+---
 
-❌ OPCJA C: „na oko z drzew”
+## **8. Pozyskanie danych i selekcja genomów**
 
-Nie.
-Drzewa są walidacją końcową, nie filtrem.
+Dane genomowe pobierano z bazy NCBI, korzystając z metadanych dotyczących dostępnych złożeń. Do dalszej analizy dopuszczano wyłącznie złożenia należące do bazy RefSeq, oznaczone prefiksem „GCF”. Pozwalało to ograniczyć wpływ błędów wynikających z niskiej jakości adnotacji.
 
-4️⃣ Gdzie dodać df.sort_values(...)?
+W przypadku wielu dostępnych złożeń dla jednego gatunku stosowano hierarchię jakości, preferując genomy chromosomowe, następnie typu scaffold, a na końcu contig. Takie podejście zapewniało możliwie wysoką jakość danych wejściowych dla dalszych etapów pipeline’u.
 
-W TYM SAMYM skrypcie, po filtracji.
+---
 
-Minimalny schemat w main():
+## **9. Klastrowanie homologów (MMseqs2)**
 
-df = collect_stats(args.results, args.reference)
+Sekwencje białkowe ze wszystkich genomów zostały połączone w jeden zbiór i poddane analizie typu każdy-z-każdym z wykorzystaniem programu MMseqs2. Do klastrowania zastosowano parametry minimalnej identyczności sekwencji równej 0.4 oraz pokrycia sekwencji na poziomie 0.7, przy asymetrycznym trybie pokrycia (`cov_mode = 1`).
 
-df = filter_bad_runs(df, n_genomes=20)
+Proces klastrowania był jednym z najbardziej wymagających obliczeniowo etapów pipeline’u i został uruchomiony z wykorzystaniem 4 rdzeni CPU oraz 8 GB pamięci RAM. Celem tego etapu było wyodrębnienie rodzin homologicznych, obejmujących zarówno ortologi, jak i paralogi.
 
-df = df.sort_values(
-    by=["rf_consensus", "strict_kept", "mean_n_taxa"],
-    ascending=[True, False, False]
-)
+---
 
-df.to_csv(args.output / "ranked_runs.tsv", sep="\t", index=False)
+## **10. Selekcja ortologów i strategie filtracji**
 
+Z uzyskanych klastrów homologicznych wyodrębniano grupy ortologiczne. W trybie ścisłym wymagano obecności dokładnie jednego genu z każdego genomu w danym klastrze, co pozwalało uniknąć wpływu duplikacji genów. Dodatkowo odrzucano klastry, które nie zawierały wszystkich analizowanych gatunków.
 
-Efekt:
+W trybie rozszerzonym dopuszczano brak maksymalnie jednego genomu w klastrze, co miało na celu uwzględnienie potencjalnych utrat genów. W przypadku obecności paralogów wybierano reprezentanta na podstawie długości sekwencji. Proces selekcji generował również statystyki dotyczące liczby zaakceptowanych i odrzuconych klastrów.
 
-pierwszy wiersz = najlepszy run
+---
 
-zero ręcznego wybierania
+## **11. MSA i rekonstrukcja drzew genów**
 
-5️⃣ Finalny nextflow run ... -profile final – po co i kiedy?
+Dla każdej zaakceptowanej grupy ortologicznej wykonywano wielokrotne dopasowanie sekwencji z wykorzystaniem programu MAFFT, stosując parametry domyślne. Nie stosowano automatycznego przycinania dopasowań, aby nie usuwać potencjalnie informatywnych pozycji sekwencji.
 
-Ten krok robisz TYLKO RAZ, gdy:
+Drzewa genów rekonstruowano metodą maksymalnej wiarygodności przy użyciu programu IQ-TREE. Dla każdego dopasowania automatycznie dobierano najlepiej dopasowany model substytucji (ModelFinder Plus), a wsparcie węzłów oceniano za pomocą bootstrapu o wartości 1000. Drzewa o niskiej jakości, definiowane jako takie, w których więcej niż 30% węzłów miało wsparcie poniżej 70%, były odrzucane.
 
-✔ masz ranking
-✔ wiesz, który zestaw parametrów jest najlepszy
-✔ chcesz wynik „produkcyjny”
+---
 
-nextflow run main.nf \
-  -profile final \
-  --consensus_mode strict \
-  --max_missing 0 \
-  --min_seq_id_mmseqs 0.3 \
-  --c_mmseqs 0.8 \
-  -resume
+## **12. Rekonstrukcja drzewa gatunków i zasoby obliczeniowe**
 
+Relacje filogenetyczne pomiędzy gatunkami odtwarzano na podstawie zbioru drzew genów, stosując dwa podejścia. W podejściu konkatenacyjnym łączono dopasowania sekwencji w jedną supermacierz i rekonstruowano drzewo metodą maksymalnej wiarygodności. W podejściu koalescencyjnym wykorzystano program ASTRAL, który łączy niezależne drzewa genów w jedno superdrzewo, uwzględniając konflikty filogenetyczne.
 
+Wszystkie analizy przeprowadzono na komputerze wyposażonym w procesor Intel Core i5-10210U, 16 GB pamięci RAM oraz 8 rdzeni CPU. Najbardziej czasochłonnymi etapami pipeline’u było klastrowanie sekwencji białkowych oraz rekonstrukcja drzew genów.
 
+---
 
+Jeśli chcesz, mogę:
 
-
-~~~~~~~~~~~~~~~~~~~~~~
-Ascomycota (14)
-Saccharomyces cerevisiae (drożdże modelowe)
-Yarrowia lipolytica (drożdże oleofilne/biotech)
-Candida albicans (patogen człowieka)
-Schizosaccharomyces pombe (model – “fission yeast”)
-Neurospora crassa (model genetyczny)
-Aspergillus nidulans (model pleśni)
-Aspergillus niger (przemysł/biotech)
-Trichoderma reesei (enzymy celulolityczne)
-Zymoseptoria tritici (patogen zbóż)
-Sclerotinia sclerotiorum (patogen roślin)
-Verticillium dahliae (patogen roślin)
-Coccidioides immitis (patogen człowieka)
-Tuber melanosporum (trufla – ektomikoryza)
-Schizosaccharomyces japonicus
-
-Basidiomycota (10)
-Ustilago maydis (patogen kukurydzy, model)
-Cryptococcus neoformans (patogen człowieka)
-Malassezia globosa (skóra, lipofilne drożdże)
-Coprinopsis cinerea (model bazydiomicetów, grzyb kapeluszowy)
-Serpula lacrymans (zgnilizna drewna w budynkach)
-Postia placenta (zgnilizna brunatna drewna)
-Amanita muscaria (ektomikoryza, klasyk)
-Rhizoctonia solani (patogen roślin)
-Puccinia graminis (rdza zbóż – bardzo klasyczny patogen)
-Wallemia ichthyophaga (ekstremofil – wysokie zasolenie)
-
-Chytridiomycota / pokrewne (3)
-Batrachochytrium dendrobatidis (chytrid – globalnie znany patogen płazów)
-Spizellomyces punctatus
-Synchytrium endobioticum (patogen ziemniaka; jeśli w TimeTree brak, podmień na Rhizoclosmatium globosum)
-
-Mucoromycota / “wczesne” linie (3
-Rhizopus delemar (często spotkasz też jako Rhizopus oryzae w bazach)
-Phycomyces blakesleeanus
-Rhizophagus irregularis (Glomeromycota, mikoryza)
+* skrócić to do **wersji „na kartkę A4”**,
+* przygotować **checklistę do mówienia bez czytania**,
+* albo zaznaczyć **miejsca, gdzie prowadzący najczęściej zadaje pytania**.

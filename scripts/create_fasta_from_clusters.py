@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """
 Script to extract sequences for ONE orthologous gene cluster
 and write them into a single FASTA file.
@@ -133,7 +135,7 @@ if len(cluster_genes) < 2:
         f"Cluster {CLUSTER_ID} has fewer than 2 sequences – skipping",
         file=sys.stderr,
     )
-    sys.exit(1)
+    sys.exit(0)
 
 # write FASTA file
 write_cluster_fasta(

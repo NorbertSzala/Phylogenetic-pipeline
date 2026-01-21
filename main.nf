@@ -19,7 +19,9 @@ workflow {
         .map { it.trim().replaceAll(/\r/, '') }
         .filter { it }
     
-    species_ch.view { "SPECIES='${it}'" }
+    n_genomes = species_ch.count().first()
+
+
 
 
 
@@ -54,8 +56,6 @@ workflow {
         input:      tuple(species, proteome.faa, qc.tsv)
         output:     gene_to_species.tsv
     */
-    proteomes_with_qc_ch.view { "DEBUG: $it" }
-
     gene_maps_ch = create_mapping(proteomes_with_qc_ch)
     //merge all outputs to single file
     gene_maps_file_ch = gene_maps_ch
@@ -85,44 +85,48 @@ workflow {
     7. Filter orthologous genes (1 to 1)
 
         input:      clusters from mmseqs2
-        output:     orthologs_relaxed.tsv
+        output:     orthologs_strict.tsv
     * STRICT orthologs (true 1-to-1)
     */
     strict = orthology_pipeline(
         clusters_ch.clusters,
         merged_faa_ch,
-        0,
-        "strict"
+        "strict",
+        n_genomes
     )
 
-    /*
-    * RELAXED orthologs (N–k, pseudo-single-copy)
-    */
-    relaxed = orthology_pipeline(
-        clusters_ch.clusters,
-        merged_faa_ch,
-        params.max_missing,
-        "relaxed")
 
 
     /*
     * STRICT → consensus (IQ-TREE)
+    * 1) strip gene IDs -> taxa == species
+    * 2) count taxa (opcjonalnie przed/po strip; ja daję po strip dla pewności)
+    * 3) filter only complete trees
+    * 4) concat into one .tre
     */
-    strict_species_tree_ch = strict.trees
-        .map { cid, tree -> tree }
-        | strip_gene_ids_from_trees
-        | collectFile(name: "gene_trees.strict.list", newLine: true)
-        | consensus_tree
+    strict_stripped_trees = strict.trees \
+        | map { cid, tree -> tree } \
+        | strip_gene_ids_from_trees \
+        | map { cid, tree -> tree }
 
+    strict_complete_trees = strict_stripped_trees \
+        | map { tree -> tuple(tree.simpleName, tree) } \
+        | count_taxa_in_tree \
+        | map { cid, tree, ntaxa_file -> tuple(cid, tree, ntaxa_file.text.trim().toInteger()) } \
+        | filter { cid, tree, ntaxa -> ntaxa == n_genomes } \
+        | map { cid, tree, ntaxa -> tree }
+
+    consensus_input = strict_complete_trees.collect() | concat_trees
+    consensus_tree(consensus_input)
 
 
     /*
-    * 18. Build supertree (ASTRAL) from RELAXED gene trees
+    * 18. Build supertree (ASTRAL) from STRICT gene trees
     */
-    astral_input_ch = relaxed.trees
+    astral_input_ch = strict.trees
         .map { cid, tree -> tree }
         .collectFile(
-            name: 'all_gene_trees.relaxed.tre',
+            name: 'all_gene_trees.strict.tre',
             newLine: true
         )
 
@@ -130,12 +134,6 @@ workflow {
     astral_tree_ch  = astral_tree(astral_clean_ch)
 
 
-    // Count statistics after run
-    relaxed_tree_list_ch = relaxed.trees
-    .map { cid, tree -> tree }
-    .collectFile(name: "gene_trees.relaxed.tre", newLine:true)
-
-    tree_stats(relaxed_tree_list_ch)
 
 }
 
@@ -145,17 +143,17 @@ workflow orthology_pipeline {
     take:
         clusters_ch
         merged_faa_ch
-        max_missing
         label
+        n_genomes
 
     main:
 
         /*
          * Filter orthologs with given missing-data tolerance
          */
-        filt = label == "strict"
-            ? filter_orthologs_strict(clusters_ch)
-            : filter_orthologs_relaxed(clusters_ch)
+
+        filt = filter_orthologs_strict(clusters_ch, n_genomes)
+
 
         orthologs_ch = filt.orthologs
         stats_ch     = filt.stats
@@ -164,7 +162,7 @@ workflow orthology_pipeline {
 
         /*
         * 8. Extract cluster IDs
-            input:      orthologs_relaxed.tsv
+            input:      orthologs_strict.tsv
             output:     Channel< tuple(cluster_id, safe_cluster_id) >
         */
         cluster_ids_ch = orthologs_ch
@@ -181,32 +179,26 @@ workflow orthology_pipeline {
         /* 9. Create per-cluster FASTA files
         input:
             tuple(cluster_id, safe_cluster_id)
-            orthologs_relaxed.tsv
+            orthologs_strict.tsv
             all_proteomes.faa
         output:
             tuple(cluster_id, cluster_sequences.faa)
         */
-        fasta_ch = label == "strict"
-            ? cluster_ids_ch.combine(orthologs_ch).combine(merged_faa_ch) | make_clusters_fasta_strict
-            : cluster_ids_ch.combine(orthologs_ch).combine(merged_faa_ch) | make_clusters_fasta_relaxed
+        fasta_ch = cluster_ids_ch.combine(orthologs_ch).combine(merged_faa_ch) | make_clusters_fasta_strict
 
 
         /* 10. Make alignemnt (MAFFT) on clusters)
             input:      fassta_ch - one FASTA file with sequences for a single cluster
             output:     alignments
         */
-        aln_ch = label == "strict"
-            ? mafft_align_strict(fasta_ch)
-            : mafft_align_relaxed(fasta_ch)
+        aln_ch = mafft_align_strict(fasta_ch)
 
 
         /*11. Count ML trees on given alignments. 
             input:      tuple val(cluster_id), path(aln)
             ouptut:     tuple val(cluster_id, treefiles)    
         */
-        trees_ch = label == "strict"
-            ? gene_tree_ml_strict(aln_ch)
-            : gene_tree_ml_relaxed(aln_ch)
+        trees_ch = gene_tree_ml_strict(aln_ch)
 
 
     emit:
@@ -255,6 +247,39 @@ process select_best_assemblies {
     """
 }
 
+process concat_trees {
+
+    input:
+        path trees
+
+    output:
+        path "trees_for_consensus.tre"
+
+    script:
+    """
+    cat ${trees} > trees_for_consensus.tre
+    """
+}
+
+
+process count_taxa_in_tree {
+
+    input:
+        tuple val(cluster_id), path(tree)
+
+    output:
+        tuple val(cluster_id), path(tree), path("ntaxa.txt")
+
+    script:
+    """
+    ntaxa=\$(grep -o ',' ${tree} | wc -l)
+    ntaxa=\$((ntaxa + 1))
+    echo \$ntaxa > ntaxa.txt
+    """
+}
+
+
+
 
 process download_genomes {
 
@@ -282,7 +307,7 @@ process create_mapping {
     tuple val(species), path(proteome), path(qc_tsv)
     
     output:
-    tuple val(species), path("*gene_to_species.tsv")
+    tuple val(species), path("*.gene_to_species.tsv")
 
 
     script:
@@ -347,29 +372,6 @@ process make_clusters_fasta_strict {
     """
 }
 
-process make_clusters_fasta_relaxed {
-
-    tag "${safe}.relaxed"
-    publishDir "${params.results}/clusters/fasta/relaxed", mode: 'copy'
-    cpus 4
-
-    input:
-        tuple val(cluster_id), val(safe), path(orthologs_tsv), path(all_proteomes)
-
-    output:
-        tuple val(cluster_id), path("${safe}.faa")
-
-    script:
-    """
-    python3 ${projectDir}/scripts/create_fasta_from_clusters.py \
-        --cluster_id '${cluster_id}' \
-        --orthologs ${orthologs_tsv} \
-        --proteomes ${all_proteomes} \
-        --pick ${params.pick_representative} \
-        --output ${safe}.faa
-
-    """
-}
 
 
 process mafft_align_strict {
@@ -388,21 +390,6 @@ process mafft_align_strict {
     """
 }
 
-process mafft_align_relaxed {
-    publishDir "${params.results}/alignments/relaxed", mode: 'copy'
-    cpus 4
-
-    input:
-        tuple val(cluster_id), path(fasta)
-
-    output:
-        tuple val(cluster_id), path("${fasta.simpleName}.aln.faa")
-
-    script:
-    """
-    mafft --thread ${task.cpus} ${fasta} > ${fasta.simpleName}.aln.faa
-    """
-}
 
 
 // remember to make two executions - with and without bootstrap
@@ -471,8 +458,9 @@ process gene_tree_ml_strict {
 
     script:
     def bootstrap_flag = params.bootstrap
-        ? "-B ${params.bootstrap_reps}"
+        ? "-b ${params.bootstrap_reps}"
         : ""
+
 
     """
     # --- minimalna walidacja alignmentu ---
@@ -501,69 +489,6 @@ process gene_tree_ml_strict {
     mv tree.treefile ${aln.simpleName}.treefile
     """
 }
-
-
-process gene_tree_ml_relaxed {
-
-    tag "${cluster_id}"
-
-    publishDir "${params.results}/gene_trees/relaxed", mode: 'copy'
-    cpus 4
-    memory '4 GB'
-    time '2h'
-
-    /*
-     * KLUCZOWE:
-     * - nie zabijaj pipeline'u na pojedynczym błędzie
-     * - brak retry (błąd jest deterministyczny)
-     */
-    errorStrategy 'ignore'
-    maxRetries 0
-
-    input:
-        tuple val(cluster_id), path(aln)
-
-    output:
-        /*
-         * emit tylko wtedy, gdy treefile faktycznie powstał
-         * (Nextflow sam odfiltruje brakujące outputy)
-         */
-        tuple val(cluster_id), path("${aln.simpleName}.treefile")
-
-    script:
-    def bootstrap_flag = params.bootstrap
-        ? "-B ${params.bootstrap_reps}"
-        : ""
-
-    """
-    # --- minimalna walidacja alignmentu ---
-    nseq=\$(grep -c "^>" ${aln})
-
-    if [ "\$nseq" -lt 3 ]; then
-        echo "[SKIP] ${aln} has only \$nseq sequences" >&2
-        exit 0
-    fi
-
-    # --- budowa drzewa ---
-    iqtree2 \
-        -s ${aln} \
-        -m MFP \
-        -nt ${task.cpus} \
-        ${bootstrap_flag} \
-        -pre tree \
-        -quiet
-
-    # --- sanity check ---
-    if [ ! -f tree.treefile ]; then
-        echo "[SKIP] IQ-TREE failed for ${aln}" >&2
-        exit 0
-    fi
-
-    mv tree.treefile ${aln.simpleName}.treefile
-    """
-}
-
-
 
 
 
@@ -572,6 +497,7 @@ process filter_orthologs_strict {
 
     input:
         path clusters
+        val n_genomes
 
     output:
         path "orthologs.tsv", emit: orthologs
@@ -581,33 +507,12 @@ process filter_orthologs_strict {
     """
     python3 ${projectDir}/scripts/filter_cluster.py \
         --input ${clusters} \
-        --n_genomes ${params.n_genomes} \
-        --max_missing 0 \
+        --n_genomes ${n_genomes} \
         --output orthologs.tsv
     """
 }
 
 
-
-process filter_orthologs_relaxed {
-    publishDir "${params.results}/stats/filtering/relaxed", mode:'copy'
-
-    input:
-        path clusters
-
-    output:
-        path "orthologs.tsv", emit: orthologs
-        path "filter.stats.tsv", emit: stats
-
-    script:
-    """
-    python3 ${projectDir}/scripts/filter_cluster.py \
-        --input ${clusters} \
-        --n_genomes ${params.n_genomes} \
-        --max_missing ${params.max_missing} \
-        --output orthologs.tsv \
-    """
-}
 
 
 process tree_stats {
@@ -633,15 +538,16 @@ process tree_stats {
 
 
 process strip_gene_ids_from_trees {
+
     input:
         path treefile
     
     output:
-        path "stripped.treefile"
+        tuple val(treefile.simpleName), path("${treefile.simpleName}.stripped.tre")
     
     script:
     """
-    sed -E 's/\\|[^,:)]*//g' ${treefile} > stripped.treefile
+    sed -E 's/\\|[^,:)]*//g' ${treefile} > ${treefile.simpleName}.stripped.tre
     """
 }
 
@@ -666,21 +572,16 @@ process consensus_tree {
 
     publishDir "${params.results}/species_tree/consensus", mode:'copy'
 
+
     input:
-        path gene_tree_list
+        path treefile
 
     output:
         path "consensus.treefile"
 
     script:
     """
-    iqtree2 \
-        -t ${gene_tree_list} \
-        -con \
-        -pre consensus \
-        -quiet
-
-    # IQ-TREE writes consensus as *.contree
+    iqtree2 -con ${treefile} -minsup 0.5 -pre consensus -quiet
     mv consensus.contree consensus.treefile
     """
 }
@@ -712,7 +613,6 @@ process astral_tree {
      * model using a collection of gene trees, allowing for:
      *   - missing taxa
      *   - gene tree discordance
-     *   - relaxed orthology (after paralog filtering)
      *
      * Input :
      *   - all_gene_trees : single file containing all gene trees (Newick)
@@ -739,21 +639,3 @@ process astral_tree {
             -o astral.treefile
     """
 }
-
-// process  {
-//     input:
-//     path
-    
-//     output:
-//     path
-
-//     script:
-//     """
-    
-//     """
-// }
-
-
-// TODO: Konsensus drzew genowych
-// TODO: Astral - supertree
-// TODO: opracować metodę gdy będzie mało klastrów 1-1 (poczekać)

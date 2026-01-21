@@ -3,15 +3,6 @@
 Reproducible phylogenomic pipeline for inference of gene trees and species trees
 using orthologous and pseudo-single-copy gene families.
 
-## Overview
-## Requirements
-## Installation
-## Running the pipeline
-## Output structure
-## Reproducibility notes
-## Citation
-
-
 ``` bash
 git clone https://github.com/NorbertSzala/Phylogenetic-pipeline
 ```
