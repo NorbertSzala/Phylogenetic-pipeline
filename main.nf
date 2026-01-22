@@ -100,7 +100,7 @@ workflow {
     /*
     * STRICT → consensus (IQ-TREE)
     * 1) strip gene IDs -> taxa == species
-    * 2) count taxa (opcjonalnie przed/po strip; ja daję po strip dla pewności)
+    * 2) count taxa
     * 3) filter only complete trees
     * 4) concat into one .tre
     */
@@ -113,7 +113,7 @@ workflow {
         | map { tree -> tuple(tree.simpleName, tree) } \
         | count_taxa_in_tree \
         | map { cid, tree, ntaxa_file -> tuple(cid, tree, ntaxa_file.text.trim().toInteger()) } \
-        | filter { cid, tree, ntaxa -> ntaxa == n_genomes } \
+        | filter { cid, tree, ntaxa -> ntaxa > 5 } \
         | map { cid, tree, ntaxa -> tree }
 
     consensus_input = strict_complete_trees.collect() | concat_trees
@@ -391,43 +391,6 @@ process mafft_align_strict {
 }
 
 
-
-// remember to make two executions - with and without bootstrap
-// process gene_tree_ml {
-//     // Adjust path depending on params.bootstrap. Returns folder path
-//     // ? means or. If params.bootstrap is True, use first value, else second one
-//     publishDir {
-//         params.bootstrap ?
-//         "${params.results}/gene_trees/bootstrap" :
-//         "${params.results}/gene_trees/no_bootstrap"
-//     }, mode: 'copy'
-
-//     cpus 4
-//     memory '4 GB'
-//     time '2h'
-
-//     input: //one alignemnt = one tree
-//     path aln
-    
-//     output: //remove last extension and add your own A.aln.faa -> A.aln.treefile
-//     path "${aln.simpleName}.treefile"
-
-//     script:
-//     def bootstrap_flag = params.bootstrap ? "-B ${params.bootstrap_reps}" : ""
-
-//     """
-//     iqtree2 \
-//         -s ${aln} \
-//         -m MFP \
-//         -nt ${task.cpus} \
-//         ${bootstrap_flag} \
-//         -pre ${aln.simpleName} \
-//         -quiet
-//     """
-// }
-
-
-
 process gene_tree_ml_strict {
 
     tag "${cluster_id}"
@@ -438,11 +401,6 @@ process gene_tree_ml_strict {
     memory '4 GB'
     time '2h'
 
-    /*
-     * KLUCZOWE:
-     * - nie zabijaj pipeline'u na pojedynczym błędzie
-     * - brak retry (błąd jest deterministyczny)
-     */
     errorStrategy 'ignore'
     maxRetries 0
 
@@ -450,10 +408,6 @@ process gene_tree_ml_strict {
         tuple val(cluster_id), path(aln)
 
     output:
-        /*
-         * emit tylko wtedy, gdy treefile faktycznie powstał
-         * (Nextflow sam odfiltruje brakujące outputy)
-         */
         tuple val(cluster_id), path("${aln.simpleName}.treefile")
 
     script:

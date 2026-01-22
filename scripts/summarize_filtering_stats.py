@@ -111,22 +111,15 @@ def main():
     args = parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
 
-    # 1. zbierz WSZYSTKIE runy
     df_all = collect_runs(args.results, args.reference)
-
-    # ZAPIS SUROWEJ TABELI (TEGO CI BRAKOWAŁO)
     df_all.to_csv(args.output / "all_runs_summary.tsv", sep="\t", index=False)
-
-    # 2. odfiltruj złe runy
     df = filter_bad_runs(df_all, n_genomes=20)
 
-    # 3. posortuj najlepsze
     df = df.sort_values(
         by=["rf_consensus", "strict_kept", "mean_n_taxa"],
         ascending=[True, False, False],
     )
 
-    # 4. zapisz ranking
     df.to_csv(args.output / "ranked_runs.tsv", sep="\t", index=False)
 
     print("Generated:")

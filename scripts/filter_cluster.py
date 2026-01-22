@@ -98,7 +98,6 @@ def main():
                     paralog = True
                 selected.append(sorted(genes)[0])
 
-            # STRICT: paralogi niedozwolone
             if paralog:
                 rejected_paralogs += 1
                 continue
@@ -108,7 +107,7 @@ def main():
             for gene in selected:
                 out.write(f"{rep_id}\t{species_from_id(gene)}\t{gene}\n")
 
-    # --------- STATYSTYKI ---------
+    # --------- statistics ---------
 
     with open("filter.stats.tsv", "w") as stats:
         stats.write("metric\tvalue\n")

@@ -25,16 +25,14 @@ import argparse
 import sys
 
 
-# ---------------------------------------------------------------------
 # Argument parsing
-# ---------------------------------------------------------------------
+
 
 def parse_args():
     """
     Parse command-line arguments.
 
     Returns
-    -------
     argparse.Namespace
         tree      : input tree file (Newick)
         taxonomy  : text file with species names
@@ -68,21 +66,18 @@ def parse_args():
     return parser.parse_args()
 
 
-# ---------------------------------------------------------------------
 # Core functions
-# ---------------------------------------------------------------------
+
 
 def load_tree(tree_file: Path) -> Tree:
     """
     Load a phylogenetic tree from file.
 
     Parameters
-    ----------
     tree_file : Path
         Path to Newick tree file
 
     Returns
-    -------
     Tree
         ETE tree object
     """
@@ -92,7 +87,6 @@ def load_tree(tree_file: Path) -> Tree:
     return Tree(str(tree_file))
 
 
-
 def load_taxa(taxonomy_file: Path) -> list[str]:
     """
     Load species names from taxonomy file.
@@ -100,12 +94,10 @@ def load_taxa(taxonomy_file: Path) -> list[str]:
     Spaces are replaced with underscores to match tree labels.
 
     Parameters
-    ----------
     taxonomy_file : Path
         File with species names (one per line)
 
     Returns
-    -------
     list[str]
         Normalized species names
     """
@@ -113,11 +105,7 @@ def load_taxa(taxonomy_file: Path) -> list[str]:
         sys.exit(f"Taxonomy file not found: {taxonomy_file}")
 
     with taxonomy_file.open() as f:
-        return [
-            line.strip().replace(" ", "_")
-            for line in f
-            if line.strip()
-        ]
+        return [line.strip().replace(" ", "_") for line in f if line.strip()]
 
 
 def find_matching_leaves(tree: Tree, taxa: list[str]) -> list[str]:
@@ -127,14 +115,12 @@ def find_matching_leaves(tree: Tree, taxa: list[str]) -> list[str]:
     A leaf is selected if its name starts with a taxon name.
 
     Parameters
-    ----------
     tree : Tree
         Input phylogenetic tree
     taxa : list[str]
         List of species identifiers
 
     Returns
-    -------
     list[str]
         Names of leaves to keep
     """
@@ -155,7 +141,6 @@ def prune_tree(tree: Tree, leaves: list[str]) -> None:
     Prune tree in place to retain selected leaves.
 
     Parameters
-    ----------
     tree : Tree
         Tree to prune
     leaves : list[str]
@@ -172,7 +157,6 @@ def save_tree(tree: Tree, output_file: Path) -> None:
     Save pruned tree to file.
 
     Parameters
-    ----------
     tree : Tree
         Pruned tree
     output_file : Path
@@ -181,9 +165,8 @@ def save_tree(tree: Tree, output_file: Path) -> None:
     tree.write(outfile=str(output_file))
 
 
-# ---------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------
+
 
 def main():
     args = parse_args()

@@ -9,11 +9,8 @@ Input:
 Output:
     - One <species>.faa file written to output directory
 
-Errors:
-    - Reported via stderr
-    - Non-zero exit code on failure (Nextflow-compatible)
 
-Validation steps:
+steps:
 1. Robust downloading with fallback over ranked assemblies
 2. Extraction of protein FASTA
 3. FAST proteome-level quality control (QC)
@@ -50,14 +47,7 @@ NCBI_INCLUDE = "protein"
 
 # ~~~~~ Argument parsing ~~~~~
 def parse_args():
-    """
-    Parse command-line arguments.
 
-    Expected input:
-    - TSV with one species and ranked RefSeq assemblies
-    - output directories for archives and FASTA files
-    - path to log file (important for reproducibility)
-    """
     parser = argparse.ArgumentParser(
         description="Download proteome and make quality control for one species from ranked RefSeq assemblies"
     )
@@ -194,9 +184,8 @@ def main():
 
     qc_tsv = args.outdir / "qc_summary.tsv"
 
-    # ------------------------------------------------------------------
     # Load assemblies (one species per TSV by pipeline contract)
-    # ------------------------------------------------------------------
+
     assemblies = defaultdict(list)
     with args.input.open() as f:
         next(f)

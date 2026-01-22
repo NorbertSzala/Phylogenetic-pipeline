@@ -1,83 +1,60 @@
-#!/usr/bin/env Rscript
+suppressPackageStartupMessages({
+  library(ape)
+  library(TreeDist)
+  library(optparse)
+})
 
-library(ape)
 
-args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 3) {
-  stop("Usage: Rscript plot_rf_differences.R ref_tree.nwk query_tree.nwk output.png")
-}
+option_list <- list(
+  make_option("--tree1", type="character"),
+  make_option("--tree2", type="character"),
+  make_option("--out", type="character"),
+  make_option("--metric", type="character", default="RF")
+)
+opt <- parse_args(OptionParser(option_list = option_list))
 
-ref_file   <- args[1]
-query_file <- args[2]
-out_png    <- args[3]
 
-# ----------------------------
-# Load trees
-# ----------------------------
-ref   <- unroot(read.tree(ref_file))
-query <- unroot(read.tree(query_file))
+t1 <- unroot(read.tree(opt$tree1))
+t2 <- unroot(read.tree(opt$tree2))
 
-# remove gene IDs if present
-ref$tip.label   <- sub("\\|.*$", "", ref$tip.label)
-query$tip.label <- sub("\\|.*$", "", query$tip.label)
+common <- intersect(t1$tip.label, t2$tip.label)
+t1 <- drop.tip(t1, setdiff(t1$tip.label, common))
+t2 <- drop.tip(t2, setdiff(t2$tip.label, common))
 
-# keep only common taxa
-common <- intersect(ref$tip.label, query$tip.label)
-ref   <- drop.tip(ref, setdiff(ref$tip.label, common))
-query <- drop.tip(query, setdiff(query$tip.label, common))
+stopifnot(length(t1$tip.label) >= 3)
 
-# ----------------------------
-# Get splits (RF definition)
-# ----------------------------
-# prop.part() = bipartitions
-ref_splits   <- prop.part(ref)
-query_splits <- prop.part(query)
-
-# convert splits to comparable strings
-split_to_string <- function(split, n) {
-  v <- rep(0, n)
-  v[split] <- 1
-  paste(v, collapse = "")
-}
-
-n <- length(query$tip.label)
-
-ref_strings <- sapply(ref_splits, split_to_string, n = n)
-qry_strings <- sapply(query_splits, split_to_string, n = n)
-
-# splits unique to query tree = RF differences
-diff_strings <- setdiff(qry_strings, ref_strings)
-
-# ----------------------------
-# Color edges in query tree
-# ----------------------------
-edge_cols <- rep("black", nrow(query$edge))
-
-for (i in seq_along(query_splits)) {
-  split_str <- split_to_string(query_splits[[i]], n)
-  if (split_str %in% diff_strings) {
-    node <- attr(query_splits, "node")[i]
-    edge_cols[which(query$edge[,2] == node)] <- "red"
-  }
-}
-
-# ----------------------------
-# Plot
-# ----------------------------
-png(out_png, width = 1000, height = 900)
-
-plot(
-  query,
-  edge.color = edge_cols,
-  cex = 0.8,
-  main = "Query tree\n(red = RF-unique splits)"
+tip_map <- data.frame(
+  letter = LETTERS[seq_along(t1$tip.label)],
+  species = t1$tip.label
 )
 
+
+t1$tip.label <- seq_along(t1$tip.label)
+t2$tip.label <- seq_along(t2$tip.label)
+
+
+metric_fun <- switch(opt$metric,
+  RF     = RobinsonFouldsMatching,
+  InfoRF = InfoRobinsonFoulds,
+  SPI    = SharedPhylogeneticInfo,
+  JRF    = JaccardRobinsonFoulds,
+  stop("Unknown metric")
+)
+
+
+png(opt$out, width = 2000, height = 900, res = 150)
+
+VisualizeMatching(
+  metric_fun,
+  t1,
+  t2,
+  Plot = TreeDistPlot,
+  matchZeros = FALSE
+)
 legend(
   "topleft",
-  legend = c("shared split", "RF-unique split"),
-  col = c("black", "red"),
-  lwd = 2,
+  legend = paste(tip_map$letter, tip_map$species),
+  cex = 0.6,
   bty = "n"
 )
 
